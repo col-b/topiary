@@ -63,13 +63,14 @@ class TopiaryApp(App):
             yield row
 
     def _make_pane(self, pane_cfg: PaneConfig) -> Widget:
+        hz = self.config_data.refresh_rate_hz
         match pane_cfg.type:
             case "system":
                 return SystemPane(pane_cfg, id=pane_cfg.id)
             case "tabs":
-                return TabsPane(pane_cfg, id=pane_cfg.id)
+                return TabsPane(pane_cfg, id=pane_cfg.id, refresh_rate_hz=hz)
             case _:  # "command" and anything unknown
-                return CommandPane(pane_cfg, id=pane_cfg.id)
+                return CommandPane(pane_cfg, id=pane_cfg.id, refresh_rate_hz=hz)
 
     # ------------------------------------------------------------------ #
     # Config file watcher                                                  #

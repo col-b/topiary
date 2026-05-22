@@ -33,11 +33,13 @@ class CommandPane(Widget):
         pane_cfg: PaneConfig,
         *,
         show_border: bool = True,
+        refresh_rate_hz: float = 20.0,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
         self._show_border = show_border
+        self._refresh_rate_hz = max(1.0, refresh_rate_hz)
         self._runner: TerminalRunner | None = None
         self._dirty: bool = False  # set by PTY callback; consumed by display timer
 
@@ -53,8 +55,8 @@ class CommandPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
-        # Render at ~20 Hz; the PTY reader just sets _dirty between frames.
-        self.set_interval(1 / 20, self._maybe_refresh)
+        # Render at configured Hz; the PTY reader just sets _dirty between frames.
+        self.set_interval(1 / self._refresh_rate_hz, self._maybe_refresh)
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
     # ------------------------------------------------------------------ #

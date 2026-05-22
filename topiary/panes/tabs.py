@@ -31,9 +31,10 @@ class TabsPane(Widget):
     }
     """
 
-    def __init__(self, pane_cfg: PaneConfig, **kwargs) -> None:
+    def __init__(self, pane_cfg: PaneConfig, *, refresh_rate_hz: float = 20.0, **kwargs) -> None:
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
+        self._refresh_rate_hz = refresh_rate_hz
 
     def compose(self) -> ComposeResult:
         with TabbedContent():
@@ -49,7 +50,7 @@ class TabsPane(Widget):
                     width="1fr",
                 )
                 with TabPane(tab_cfg.title, id=inner_cfg.id):
-                    yield CommandPane(inner_cfg, show_border=False, id=f"cmd-{inner_cfg.id}")
+                    yield CommandPane(inner_cfg, show_border=False, refresh_rate_hz=self._refresh_rate_hz, id=f"cmd-{inner_cfg.id}")
 
     def on_mount(self) -> None:
         self.styles.width = self.pane_cfg.width

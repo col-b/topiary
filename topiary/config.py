@@ -36,6 +36,7 @@ class RowConfig:
 @dataclass
 class AppConfig:
     title: str = "topiary"
+    refresh_rate_hz: float = 20.0
     rows: list[RowConfig] = field(default_factory=list)
 
 
