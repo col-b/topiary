@@ -115,7 +115,7 @@ class TerminalRunner:
             stdout=slave_fd,
             stderr=slave_fd,
             env=env,
-            cwd=cwd,
+            cwd=os.path.expanduser(cwd) if cwd else None,
             close_fds=True,
             start_new_session=True,
         )
