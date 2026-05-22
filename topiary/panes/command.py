@@ -31,6 +31,7 @@ class CommandPane(Widget):
     CommandPane > VerticalScroll {
         width: 1fr;
         height: 1fr;
+        scrollbar-size-vertical: 0;
     }
     CommandPane > VerticalScroll > Static {
         width: 100%;
