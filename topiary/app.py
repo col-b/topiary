@@ -353,18 +353,6 @@ class TopiaryApp(App):
                     os.write(runner._master_fd, key_bytes)
                 except OSError:
                     pass
-            # For up/down, also scroll topiary's VerticalScroll so the
-            # selected row stays visible inside the pane's viewport.
-            if event.key in ("up", "down"):
-                from textual.containers import VerticalScroll
-                try:
-                    scroller = self._passthrough_target.query_one(VerticalScroll)
-                    if event.key == "up":
-                        scroller.scroll_up(animate=False)
-                    else:
-                        scroller.scroll_down(animate=False)
-                except Exception:
-                    pass
             event.stop()
 
         elif self._focused_pane is not None:
