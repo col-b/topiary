@@ -21,10 +21,14 @@ class TabsPane(Widget):
     TabsPane TabbedContent {
         height: 1fr;
     }
+    TabsPane ContentSwitcher {
+        height: 1fr;
+    }
     TabsPane TabPane {
+        height: 1fr;
         padding: 0;
     }
-    TabsPane > TabbedContent > TabPane > * {
+    TabsPane TabPane > * {
         width: 1fr;
         height: 1fr;
         border: none;
