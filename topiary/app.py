@@ -46,6 +46,7 @@ class TopiaryApp(App):
 
     def on_mount(self) -> None:
         self.title = self.config_data.title
+        self.screen.styles.background = self.config_data.background
         self.run_worker(self._watch_config(), exclusive=True, name="config-watcher")
 
     # ------------------------------------------------------------------ #
@@ -116,6 +117,7 @@ class TopiaryApp(App):
             await self.mount(row)
 
         self.title = self.config_data.title
+        self.screen.styles.background = self.config_data.background
         self.notify("Config reloaded ↺", timeout=2)
 
     # ------------------------------------------------------------------ #

@@ -5,7 +5,6 @@ import asyncio
 import fcntl
 import os
 import pty
-import re
 import signal
 import struct
 import termios
@@ -14,14 +13,6 @@ from typing import Callable
 import pyte
 from rich.style import Style
 from rich.text import Text
-
-# Matches OSC 8 hyperlink sequences:
-#   \x1b]8;<params>;<url><BEL>  or  \x1b]8;<params>;<url><ESC>\
-# Group 1 captures the URL (empty string = end of link).
-_OSC8_RE = re.compile(
-    rb"\x1b\]8;[^;]*;([^\x07\x1b]*)"
-    rb"(?:\x07|\x1b\\)"
-)
 
 # pyte's basic-8 color names → Rich color names
 _NAMED = {
@@ -47,56 +38,8 @@ def _pyte_color(color: str | None, bold: bool = False) -> str | None:
     return f"bright_{name}" if bold else name
 
 
-class HyperlinkScreen(pyte.Screen):
-    """pyte Screen that tracks OSC 8 hyperlink positions."""
-
-    def __init__(self, columns: int, lines: int) -> None:
-        super().__init__(columns, lines)
-        self._current_link: str | None = None
-        self._link_map: dict[tuple[int, int], str] = {}
-
-    def draw(self, char: str) -> None:
-        row = self.cursor.y
-        start_col = self.cursor.x
-        super().draw(char)
-        # pyte may batch multiple chars into one draw() call; record each position
-        for i in range(len(char)):
-            pos = (row, start_col + i)
-            if self._current_link:
-                self._link_map[pos] = self._current_link
-            else:
-                self._link_map.pop(pos, None)
-
-    def erase_in_display(self, how: int = 0, **kwargs) -> None:
-        super().erase_in_display(how, **kwargs)
-        if how in (2, 3):
-            self._link_map.clear()
-
-    def reset(self) -> None:
-        super().reset()
-        self._current_link = None
-        self._link_map = {}
-
-
-def _feed_with_links(
-    screen: HyperlinkScreen, stream: pyte.ByteStream, data: bytes
-) -> None:
-    """Feed PTY bytes to pyte, intercepting OSC 8 hyperlink sequences."""
-    pos = 0
-    for m in _OSC8_RE.finditer(data):
-        chunk = data[pos : m.start()]
-        if chunk:
-            stream.feed(chunk)
-        url = m.group(1).decode("utf-8", errors="replace").strip()
-        screen._current_link = url if url else None
-        pos = m.end()
-    if pos < len(data):
-        stream.feed(data[pos:])
-
-
 def screen_to_rich(screen: pyte.Screen) -> Text:
     """Convert a pyte Screen buffer to a Rich Text object."""
-    link_map: dict[tuple[int, int], str] = getattr(screen, "_link_map", {})
     text = Text(no_wrap=True, overflow="crop")
     for y in range(screen.lines):
         line = screen.buffer[y]
@@ -117,8 +60,6 @@ def screen_to_rich(screen: pyte.Screen) -> Text:
                 blink=char.blink,
                 strike=char.strikethrough,
             )
-            if url := link_map.get((y, x)):
-                style = style + Style.from_meta({"@click": f"link({url!r})"})
             text.append(char.data or " ", style=style)
         text.append("\n")
     return text
@@ -131,7 +72,7 @@ class TerminalRunner:
         self.command = command
         self.rows = max(4, rows)
         self.cols = max(10, cols)
-        self._screen = HyperlinkScreen(self.cols, self.rows)
+        self._screen = pyte.Screen(self.cols, self.rows)
         self._pyte_stream = pyte.ByteStream(self._screen)
         self._master_fd: int = -1
         self._proc: asyncio.subprocess.Process | None = None
@@ -240,7 +181,7 @@ class TerminalRunner:
         try:
             data = os.read(self._master_fd, 16384)
             if data:
-                _feed_with_links(self._screen, self._pyte_stream, data)
+                self._pyte_stream.feed(data)
                 if self._on_update:
                     self._on_update()
             else:
