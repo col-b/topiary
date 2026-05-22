@@ -63,18 +63,76 @@ def _key_to_style(key: tuple) -> Style | None:
     )
 
 
-def screen_to_rich(screen: pyte.Screen, trim_trailing: bool = False) -> Text:
+def _render_row(line: dict, cols: int, default_key: tuple, style_cache: dict) -> Text:
+    """Render a single pyte screen row to a Rich Text (no trailing newline)."""
+    row_text = Text(no_wrap=True, overflow="crop")
+    if not line:
+        row_text.append(" " * cols)
+        return row_text
+
+    written = sorted(line.items())
+    prev_x = 0
+    run_key: tuple | None = None
+    run_chars: list[str] = []
+
+    def _flush() -> None:
+        if not run_chars:
+            return
+        style = style_cache.get(run_key)
+        if style is None and run_key not in style_cache:
+            style = _key_to_style(run_key)   # type: ignore[arg-type]
+            style_cache[run_key] = style      # type: ignore[index]
+        row_text.append("".join(run_chars), style=style)
+        run_chars.clear()
+
+    for x, char in written:
+        if x > prev_x:
+            gap = x - prev_x
+            if run_key == default_key:
+                run_chars.append(" " * gap)
+            else:
+                _flush()
+                run_key = default_key
+                run_chars.append(" " * gap)
+        key = _char_key(char)
+        data = char.data or " "
+        if key == run_key:
+            run_chars.append(data)
+        else:
+            _flush()
+            run_key = key
+            run_chars.append(data)
+        prev_x = x + 1
+
+    if prev_x < cols:
+        gap = cols - prev_x
+        if run_key == default_key:
+            run_chars.append(" " * gap)
+        else:
+            _flush()
+            run_key = default_key
+            run_chars.append(" " * gap)
+
+    _flush()
+    return row_text
+
+
+def screen_to_rich(
+    screen: pyte.Screen,
+    trim_trailing: bool = False,
+    line_cache: list | None = None,
+) -> Text:
     """Convert a pyte Screen buffer to a Rich Text object.
 
-    Optimised: coalesces same-style character runs into single spans and
-    caches Style objects so only O(unique_styles) objects are created per
-    render instead of O(rows × cols).
-    Uses sparse row iteration: only cells explicitly written by the terminal
-    are visited; gaps are filled with a single space-run append.
+    If line_cache is provided (a list of [Text, dirty_bool] per row),
+    only dirty rows are re-rendered; clean rows reuse the cached Text.
+    Call screen.dirty.clear() AFTER this function to reset pyte's tracking.
     """
-    text = Text(no_wrap=True, overflow="crop")
-    last_content_row = screen.lines - 1
+    default_char = pyte.screens.Char(" ")
+    default_key = _char_key(default_char)
+    style_cache: dict[tuple, Style | None] = {}
 
+    last_content_row = screen.lines - 1
     if trim_trailing:
         for y in range(screen.lines - 1, -1, -1):
             row_map = screen.buffer[y]
@@ -84,69 +142,30 @@ def screen_to_rich(screen: pyte.Screen, trim_trailing: bool = False) -> Text:
         else:
             last_content_row = 0
 
-    style_cache: dict[tuple, Style | None] = {}
-    default_char = pyte.screens.Char(" ")
-    default_key = _char_key(default_char)
+    # Ensure cache is right size
+    if line_cache is not None:
+        while len(line_cache) < screen.lines:
+            line_cache.append(None)
 
+    dirty_rows = screen.dirty  # set of row indices modified since last clear
+
+    text = Text(no_wrap=True, overflow="crop")
     for y in range(last_content_row + 1):
-        line = screen.buffer[y]
-
-        if not line:
-            # Completely empty row — single append of spaces
-            text.append(" " * screen.columns)
-            text.append("\n")
-            continue
-
-        # Sparse iteration: walk only the columns that matter
-        # Build sorted list of (col, char) for written cells, then fill gaps.
-        written = sorted(line.items())   # list of (x, Char)
-        prev_x = 0
-        run_key: tuple | None = None
-        run_chars: list[str] = []
-
-        def _flush() -> None:
-            if not run_chars:
-                return
-            style = style_cache.get(run_key)
-            if style is None and run_key not in style_cache:
-                style = _key_to_style(run_key)   # type: ignore[arg-type]
-                style_cache[run_key] = style      # type: ignore[index]
-            text.append("".join(run_chars), style=style)
-            run_chars.clear()
-
-        for x, char in written:
-            # Fill gap before this cell with default spaces
-            if x > prev_x:
-                gap = x - prev_x
-                if run_key == default_key:
-                    run_chars.append(" " * gap)
-                else:
-                    _flush()
-                    run_key = default_key
-                    run_chars.append(" " * gap)
-
-            key = _char_key(char)
-            data = char.data or " "
-            if key == run_key:
-                run_chars.append(data)
+        if line_cache is not None and not trim_trailing:
+            cached = line_cache[y]
+            if cached is not None and y not in dirty_rows:
+                # Reuse cached row
+                text.append_text(cached)
             else:
-                _flush()
-                run_key = key
-                run_chars.append(data)
-            prev_x = x + 1
-
-        # Fill trailing gap to end of line
-        if prev_x < screen.columns:
-            gap = screen.columns - prev_x
-            if run_key == default_key:
-                run_chars.append(" " * gap)
-            else:
-                _flush()
-                run_key = default_key
-                run_chars.append(" " * gap)
-
-        _flush()
+                row_text = _render_row(screen.buffer[y], screen.columns, default_key, style_cache)
+                line_cache[y] = row_text
+                text.append_text(row_text)
+        else:
+            text.append_text(_render_row(screen.buffer[y], screen.columns, default_key, style_cache))
         text.append("\n")
+
+    if line_cache is not None:
+        screen.dirty.clear()
 
     return text
 
@@ -160,6 +179,7 @@ class TerminalRunner:
         self.cols = max(10, cols)
         self._screen = pyte.Screen(self.cols, self.rows)
         self._pyte_stream = pyte.ByteStream(self._screen)
+        self._line_cache: list = []   # per-row cached Rich Text; invalidated by screen.dirty
         self._master_fd: int = -1
         self._proc: asyncio.subprocess.Process | None = None
         self._on_update: Callable | None = None
@@ -179,7 +199,11 @@ class TerminalRunner:
         return self._proc.returncode if self._proc else None
 
     def render(self, trim_trailing: bool = False) -> Text:
-        return screen_to_rich(self._screen, trim_trailing=trim_trailing)
+        return screen_to_rich(
+            self._screen,
+            trim_trailing=trim_trailing,
+            line_cache=None if trim_trailing else self._line_cache,
+        )
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
@@ -276,6 +300,7 @@ class TerminalRunner:
             return
         self.rows, self.cols = rows, cols
         self._screen.resize(rows, cols)
+        self._line_cache.clear()   # dimensions changed; cached rows are stale
         if self._master_fd >= 0:
             try:
                 self._set_winsize(self._master_fd)
