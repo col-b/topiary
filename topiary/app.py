@@ -297,9 +297,17 @@ class TopiaryApp(App):
     def action_deactivate_pane(self) -> None:
         """Escape → exit passthrough → focused; second Escape → unfocus."""
         if self._passthrough:
+            # Signal the PTY process to clear any interactive selection state.
+            t = self._passthrough_target
+            if t is not None and isinstance(t, CommandPane):
+                runner = t._runner
+                if runner is not None and runner._master_fd >= 0:
+                    try:
+                        os.write(runner._master_fd, b"\x1b")
+                    except OSError:
+                        pass
             self._passthrough = False
             # Restore title on the target pane
-            t = self._passthrough_target
             if t is not None:
                 saved = getattr(t, "_passthrough_title_saved", None)
                 if saved is not None:
