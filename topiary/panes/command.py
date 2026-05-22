@@ -115,10 +115,12 @@ class CommandPane(Widget):
 
     async def _run_once(self) -> None:
         if self.pane_cfg.scrollable:
-            rows, cols = _SCROLLABLE_ROWS, max(10, self.content_size.width) or 80
+            rows, cols = _SCROLLABLE_ROWS, max(10, self.content_size.width or 80)
         else:
-            rows = max(4, self.content_size.height) or 24
-            cols = max(10, self.content_size.width) or 80
+            # Use sensible defaults when widget hasn't been laid out yet
+            # (e.g. inactive tab has content_size (0,0))
+            rows = max(4, self.content_size.height or 24)
+            cols = max(10, self.content_size.width or 80)
         runner = TerminalRunner(
             self.pane_cfg.command or "echo 'no command configured'",
             rows,
@@ -129,6 +131,15 @@ class CommandPane(Widget):
             await runner.start(on_update=self._mark_dirty, cwd=self.pane_cfg.cwd)
             await runner.wait()
         finally:
+            # Fast commands (df -h, gcal) can exit before the first timer tick.
+            # Do one final render here so output is never silently lost.
+            if self._dirty:
+                try:
+                    text = runner.render(trim_trailing=self.pane_cfg.scrollable)
+                    self.query_one("#output", Static).update(text)
+                    self._dirty = False
+                except Exception:
+                    pass
             self._runner = None
             await runner.stop()
 
@@ -142,23 +153,13 @@ class CommandPane(Widget):
         self._pty_updates += 1
 
     def _maybe_refresh(self) -> None:
-        """Timer callback: render only if new PTY data arrived AND pane is visible."""
+        """Timer callback: render only if new PTY data has arrived since last frame."""
         if not self._dirty or self._runner is None:
-            return
-        # Skip rendering if pane is not visible (e.g. inactive tab).
-        # The dirty flag stays set so we render immediately on next visibility.
-        if not self.visible:
             return
         self._dirty = False
         t0 = time.perf_counter()
-        rich_text = None
         try:
-            if self._runner is None:
-                return
-            if self.pane_cfg.scrollable:
-                rich_text = self._runner.render(trim_trailing=True)
-            else:
-                rich_text = self._runner.render()
+            rich_text = self._runner.render(trim_trailing=self.pane_cfg.scrollable)
         except Exception:
             return
         t1 = time.perf_counter()
@@ -175,8 +176,7 @@ class CommandPane(Widget):
         except Exception:
             pass
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        render_ms = (t1 - t0) * 1000
-        self._record_perf(elapsed_ms, render_ms)
+        self._record_perf(elapsed_ms, (t1 - t0) * 1000)
 
     def _record_perf(self, elapsed_ms: float, render_ms: float) -> None:
         self._render_count += 1
