@@ -124,12 +124,11 @@ class CommandPane(Widget):
         self._dirty = False
         try:
             output = self.query_one("#output", Static)
-            output.update(self._runner.render(trim_trailing=self.pane_cfg.scrollable))
             if self.pane_cfg.scrollable:
                 scroller = self.query_one("#scroll", VerticalScroll)
-                # Only auto-scroll if user hasn't manually scrolled up
-                if scroller.is_vertical_scroll_end:
-                    scroller.scroll_end(animate=False)
+                output.update(self._runner.render(trim_trailing=self.pane_cfg.scrollable))
+            else:
+                output.update(self._runner.render())
         except Exception:
             pass
 
