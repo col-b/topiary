@@ -13,7 +13,7 @@ class PaneConfig:
     title: str = ""
     width: str = "1fr"
     command: str | None = None
-    refresh: int = 5
+    refresh: int = 0         # 0 = run once (watcher); >0 = restart N seconds after exit
     min_width: int = 0       # collapse pane when terminal narrower than this
     cwd: str | None = None   # working directory for the command
     scrollable: bool = False  # wrap output in a scrollable container

@@ -11,8 +11,7 @@ from textual.widgets import Static
 from ..config import PaneConfig
 from ..runner import TerminalRunner
 
-_DEFAULT_RESTART_DELAY = 2.0  # seconds to wait before restarting after unexpected exit
-_SCROLLABLE_ROWS = 500        # virtual PTY height for scrollable panes
+_SCROLLABLE_ROWS = 500  # virtual PTY height for scrollable panes
 
 
 class CommandPane(Widget):
@@ -79,14 +78,13 @@ class CommandPane(Widget):
     # ------------------------------------------------------------------ #
 
     async def _run_loop(self) -> None:
-        """Start the command, wait for it to exit, restart after delay — forever."""
+        """Run the command in a PTY. If refresh > 0, restart after that many seconds on exit.
+        If refresh == 0 (default), run once only — for long-running watcher commands."""
         try:
-            while True:
+            await self._run_once()
+            while self.pane_cfg.refresh > 0:
+                await asyncio.sleep(self.pane_cfg.refresh)
                 await self._run_once()
-                # refresh > 0  →  explicit interval between restarts
-                # refresh == 0 →  long-running command; brief safety delay before restart
-                delay = self.pane_cfg.refresh if self.pane_cfg.refresh > 0 else _DEFAULT_RESTART_DELAY
-                await asyncio.sleep(delay)
         finally:
             if self._runner:
                 await self._runner.stop()
