@@ -105,3 +105,7 @@ class CommandPane(Widget):
                 max(4, self.content_size.height) or 24,
                 max(10, self.content_size.width) or 80,
             )
+
+    async def action_link(self, href: str) -> None:
+        """Open a URL from a clicked OSC 8 hyperlink in the pane output."""
+        self.app.open_url(href)
