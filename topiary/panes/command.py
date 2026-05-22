@@ -14,7 +14,7 @@ from textual.widgets import Static
 from ..config import PaneConfig
 from ..runner import TerminalRunner
 
-_SCROLLABLE_ROWS = 500  # virtual PTY height for scrollable panes
+_SCROLLABLE_ROWS = 200  # virtual PTY height for scrollable panes
 
 # Module-level perf registry updated by every CommandPane on each render.
 # Keys are pane ids; read by PerfOverlay in app.py.
@@ -151,30 +151,41 @@ class CommandPane(Widget):
             return
         self._dirty = False
         t0 = time.perf_counter()
+        rich_text = None
+        try:
+            if self._runner is None:
+                return
+            if self.pane_cfg.scrollable:
+                rich_text = self._runner.render(trim_trailing=True)
+            else:
+                rich_text = self._runner.render()
+        except Exception:
+            return
+        t1 = time.perf_counter()
         try:
             output = self.query_one("#output", Static)
             if self.pane_cfg.scrollable:
                 scroller = self.query_one("#scroll", VerticalScroll)
                 at_bottom = scroller.is_vertical_scroll_end
-                output.update(self._runner.render(trim_trailing=True))
+                output.update(rich_text)
                 if self.pane_cfg.follow and at_bottom:
                     scroller.scroll_end(animate=False)
             else:
-                output.update(self._runner.render())
+                output.update(rich_text)
         except Exception:
             pass
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        self._record_perf(elapsed_ms)
+        render_ms = (t1 - t0) * 1000
+        self._record_perf(elapsed_ms, render_ms)
 
-    def _record_perf(self, render_ms: float) -> None:
+    def _record_perf(self, elapsed_ms: float, render_ms: float) -> None:
         self._render_count += 1
-        self._render_ms_total += render_ms
-        self._render_ms_last = render_ms
-        if render_ms > self._render_ms_max:
-            self._render_ms_max = render_ms
+        self._render_ms_total += elapsed_ms
+        self._render_ms_last = elapsed_ms
+        if elapsed_ms > self._render_ms_max:
+            self._render_ms_max = elapsed_ms
         now = time.monotonic()
         self._render_ts.append(now)
-        # Compute render rate over last 10 seconds
         cutoff = now - 10.0
         recent = sum(1 for t in self._render_ts if t >= cutoff)
         render_hz = recent / 10.0
@@ -182,9 +193,11 @@ class CommandPane(Widget):
             "title": self.pane_cfg.title or self.pane_cfg.id,
             "pty_updates": self._pty_updates,
             "render_count": self._render_count,
-            "render_ms_last": render_ms,
+            "render_ms_last": elapsed_ms,
             "render_ms_avg": self._render_ms_total / self._render_count,
             "render_ms_max": self._render_ms_max,
+            "s2r_ms": render_ms,       # screen_to_rich() alone
+            "update_ms": elapsed_ms - render_ms,  # Static.update() alone
             "render_hz": render_hz,
             "visible": self.visible,
         }

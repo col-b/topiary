@@ -26,51 +26,97 @@ _NAMED = {
     "white": "white",
 }
 
+# Sentinel for a fully-default style (no color, no attributes)
+_DEFAULT_KEY = (None, None, False, False, False, False, False)
+
 
 def _pyte_color(color: str | None, bold: bool = False) -> str | None:
     """Convert a pyte color value to a Rich color string."""
     if not color or color == "default":
         return None
-    # pyte 0.8 returns 256-color and truecolor as a 6-char lowercase hex string
     if len(color) == 6 and all(c in "0123456789abcdef" for c in color):
         return f"#{color}"
     name = _NAMED.get(color, color)
     return f"bright_{name}" if bold else name
 
 
+def _char_key(char) -> tuple:
+    """Return a hashable style key for a pyte Char — cheap to compute."""
+    if char.reverse:
+        fg = _pyte_color(char.bg) or "default"
+        bg = _pyte_color(char.fg, char.bold) or "default"
+    else:
+        fg = _pyte_color(char.fg, char.bold)
+        bg = _pyte_color(char.bg)
+    return (fg, bg, char.bold, char.italics, char.underscore, char.blink, char.strikethrough)
+
+
+def _key_to_style(key: tuple) -> Style | None:
+    """Build a Rich Style from a key tuple; returns None for the default style."""
+    if key == _DEFAULT_KEY:
+        return None
+    fg, bg, bold, italics, underscore, blink, strike = key
+    return Style(
+        color=fg, bgcolor=bg,
+        bold=bold, italic=italics,
+        underline=underscore, blink=blink, strike=strike,
+    )
+
+
 def screen_to_rich(screen: pyte.Screen, trim_trailing: bool = False) -> Text:
-    """Convert a pyte Screen buffer to a Rich Text object."""
+    """Convert a pyte Screen buffer to a Rich Text object.
+
+    Optimised: coalesces same-style character runs into single spans and
+    caches Style objects so only O(unique_styles) objects are created per
+    render instead of O(rows × cols).
+    pyte's sparse buffer dict is used for fast empty-row detection.
+    """
     text = Text(no_wrap=True, overflow="crop")
     last_content_row = screen.lines - 1
+
     if trim_trailing:
-        # Find the last row that has any non-space character
+        # pyte buffer rows are defaultdicts: only explicitly-written cells are
+        # present.  An empty row has no entries at all → fast O(1) check.
         for y in range(screen.lines - 1, -1, -1):
-            if any(screen.buffer[y][x].data.strip() for x in range(screen.columns)):
+            row_map = screen.buffer[y]
+            if row_map and any(c.data.strip() for c in row_map.values()):
                 last_content_row = y
                 break
         else:
             last_content_row = 0
+
+    style_cache: dict[tuple, Style | None] = {}
+
     for y in range(last_content_row + 1):
         line = screen.buffer[y]
+        run_key: tuple | None = None
+        run_chars: list[str] = []
+
         for x in range(screen.columns):
             char = line[x]
-            if char.reverse:
-                fg = _pyte_color(char.bg) or "default"
-                bg = _pyte_color(char.fg, char.bold) or "default"
+            key = _char_key(char)
+            data = char.data or " "
+            if key == run_key:
+                run_chars.append(data)
             else:
-                fg = _pyte_color(char.fg, char.bold)
-                bg = _pyte_color(char.bg)
-            style = Style(
-                color=fg,
-                bgcolor=bg,
-                bold=char.bold,
-                italic=char.italics,
-                underline=char.underscore,
-                blink=char.blink,
-                strike=char.strikethrough,
-            )
-            text.append(char.data or " ", style=style)
+                if run_chars:
+                    style = style_cache.get(run_key)  # type: ignore[arg-type]
+                    if style is None and run_key not in style_cache:
+                        style = _key_to_style(run_key)  # type: ignore[arg-type]
+                        style_cache[run_key] = style  # type: ignore[index]
+                    text.append("".join(run_chars), style=style)
+                run_key = key
+                run_chars = [data]
+
+        if run_chars:
+            style = style_cache.get(run_key)  # type: ignore[arg-type]
+            if style is None and run_key not in style_cache:
+                style = _key_to_style(run_key)  # type: ignore[arg-type]
+                style_cache[run_key] = style  # type: ignore[index]
+            text.append("".join(run_chars), style=style)
+
         text.append("\n")
+
     return text
 
 

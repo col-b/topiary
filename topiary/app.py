@@ -40,25 +40,23 @@ class PerfOverlay(Static):
             return
         table = RichTable(title="Pane Perf (press d to close)", expand=True, show_lines=False)
         table.add_column("Pane", style="cyan", max_width=16)
-        table.add_column("PTY/s", justify="right", style="dim")
         table.add_column("Rndr/s", justify="right")
-        table.add_column("Last ms", justify="right")
-        table.add_column("Avg ms", justify="right")
-        table.add_column("Max ms", justify="right")
+        table.add_column("s2r ms", justify="right")
+        table.add_column("upd ms", justify="right")
+        table.add_column("tot ms", justify="right")
+        table.add_column("max ms", justify="right")
         table.add_column("Vis", justify="center")
         rows = sorted(PANE_PERF.items(), key=lambda x: -x[1].get("render_ms_last", 0))
         for _pid, s in rows:
             last = s["render_ms_last"]
-            avg = s["render_ms_avg"]
-            worst = s["render_ms_max"]
-            color = "red" if last > 50 else ("yellow" if last > 15 else "green")
+            color = "red" if last > 30 else ("yellow" if last > 10 else "green")
             table.add_row(
                 s["title"],
-                f"{s['pty_updates'] // max(1, s['render_count']):.0f}",
                 f"{s['render_hz']:.1f}",
+                f"[{color}]{s.get('s2r_ms', 0):.1f}[/{color}]",
+                f"{s.get('update_ms', 0):.1f}",
                 f"[{color}]{last:.1f}[/{color}]",
-                f"{avg:.1f}",
-                f"{worst:.1f}",
+                f"{s['render_ms_max']:.1f}",
                 "✓" if s["visible"] else "·",
             )
         self.update(table)
