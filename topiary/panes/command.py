@@ -126,7 +126,10 @@ class CommandPane(Widget):
             output = self.query_one("#output", Static)
             if self.pane_cfg.scrollable:
                 scroller = self.query_one("#scroll", VerticalScroll)
-                output.update(self._runner.render(trim_trailing=self.pane_cfg.scrollable))
+                at_bottom = scroller.is_vertical_scroll_end
+                output.update(self._runner.render(trim_trailing=True))
+                if self.pane_cfg.follow and at_bottom:
+                    scroller.scroll_end(animate=False)
             else:
                 output.update(self._runner.render())
         except Exception:

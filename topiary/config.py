@@ -17,6 +17,7 @@ class PaneConfig:
     min_width: int = 0       # collapse pane when terminal narrower than this
     cwd: str | None = None   # working directory for the command
     scrollable: bool = False  # wrap output in a scrollable container
+    follow: bool = False      # auto-scroll to bottom on new output (only if already at bottom)
     tabs: list["PaneConfig"] = field(default_factory=list)
 
 
