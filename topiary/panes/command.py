@@ -33,7 +33,7 @@ class CommandPane(Widget):
         height: 1fr;
     }
     CommandPane > VerticalScroll > Static {
-        width: 1fr;
+        width: 100%;
         height: auto;
     }
     """
@@ -135,8 +135,10 @@ class CommandPane(Widget):
             pass
 
     def on_resize(self) -> None:
-        if self._runner and not self.pane_cfg.scrollable:
-            self._runner.resize(
-                max(4, self.content_size.height) or 24,
-                max(10, self.content_size.width) or 80,
-            )
+        if self._runner:
+            cols = max(10, self.content_size.width) or 80
+            if self.pane_cfg.scrollable:
+                # Keep the tall virtual rows; only sync the column width
+                self._runner.resize(_SCROLLABLE_ROWS, cols)
+            else:
+                self._runner.resize(max(4, self.content_size.height) or 24, cols)
