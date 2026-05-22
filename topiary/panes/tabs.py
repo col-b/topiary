@@ -49,7 +49,7 @@ class TabsPane(Widget):
                         tab_cfg,
                         self._refresh_rate_hz,
                         show_border=False,
-                        id_prefix=tab_cfg.id,
+                        id_prefix=f"inner-{tab_cfg.id}",  # avoid duplicate ID with TabPane
                     )
 
     def on_mount(self) -> None:

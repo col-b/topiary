@@ -23,7 +23,7 @@ def make_pane(
     from .system import SystemPane
     from .tabs import TabsPane
 
-    widget_id = cfg.id or f"{id_prefix}-anon"
+    widget_id = id_prefix or cfg.id or "anon-pane"
 
     match cfg.type:
         case "system":
