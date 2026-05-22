@@ -1,0 +1,38 @@
+# topiary devdash.toml — developer-focused dashboard
+# Runs: system stats, ticker, git branch tree, PR review, reminders
+
+[app]
+title = "topiary · devdash"
+
+# ── Row 1: system stats + market ticker ────────────────────────────────
+[[rows]]
+height = "35%"
+
+  [[rows.panes]]
+  id     = "system"
+  type   = "system"
+  title  = "System"
+  width  = "35%"
+
+  [[rows.panes]]
+  id      = "ticker"
+  type    = "command"
+  title   = "Market"
+  command = "ticker AUR"          # install: go install github.com/achannarasappa/ticker
+  width   = "1fr"
+  refresh = 60
+
+# ── Row 2: git / PRs / reminders (tabbed) + optional log tail ──────────
+[[rows]]
+height = "1fr"
+
+  [[rows.panes]]
+  id    = "dev"
+  type  = "tabs"
+  title = "Dev"
+  width = "1fr"
+  tabs = [
+    { title = "Git",     command = "git_branch_tree",      refresh = 10 },
+    { title = "PRs",     command = "git_branch_tree -p",   refresh = 30 },
+    { title = "Remind",  command = "remind",                refresh = 5  },
+  ]

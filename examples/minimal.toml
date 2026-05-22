@@ -1,0 +1,22 @@
+# topiary minimal.toml — system stats only
+# A good starting point for building your own layout.
+
+[app]
+title = "topiary · minimal"
+
+[[rows]]
+height = "100%"
+
+  [[rows.panes]]
+  id    = "system"
+  type  = "system"
+  title = "System"
+  width = "50%"
+
+  [[rows.panes]]
+  id      = "uptime"
+  type    = "command"
+  title   = "Uptime / Load"
+  command = "uptime && echo && df -h --output=target,used,avail,pcent | head -10"
+  width   = "1fr"
+  refresh = 10
