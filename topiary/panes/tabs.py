@@ -45,6 +45,7 @@ class TabsPane(Widget):
                     title=tab_cfg.title,
                     command=tab_cfg.command,
                     refresh=tab_cfg.refresh,
+                    cwd=tab_cfg.cwd,
                     width="1fr",
                 )
                 with TabPane(tab_cfg.title, id=inner_cfg.id):

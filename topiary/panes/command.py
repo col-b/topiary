@@ -82,7 +82,7 @@ class CommandPane(Widget):
         )
         self._runner = runner
         try:
-            await runner.start(on_update=self._refresh_display)
+            await runner.start(on_update=self._refresh_display, cwd=self.pane_cfg.cwd)
             await runner.wait()
         finally:
             self._runner = None

@@ -99,7 +99,7 @@ class TerminalRunner:
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
 
-    async def start(self, on_update: Callable | None = None) -> None:
+    async def start(self, on_update: Callable | None = None, cwd: str | None = None) -> None:
         """Launch the command in a PTY and start reading output."""
         self._on_update = on_update
         self._done = asyncio.Event()
@@ -115,6 +115,7 @@ class TerminalRunner:
             stdout=slave_fd,
             stderr=slave_fd,
             env=env,
+            cwd=cwd,
             close_fds=True,
             start_new_session=True,
         )

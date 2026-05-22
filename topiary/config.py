@@ -11,6 +11,7 @@ class TabConfig:
     title: str
     command: str
     refresh: int = 5
+    cwd: str | None = None
 
 
 @dataclass
@@ -22,6 +23,7 @@ class PaneConfig:
     command: str | None = None
     refresh: int = 5
     min_width: int = 0  # collapse pane when terminal narrower than this
+    cwd: str | None = None  # working directory for the command
     tabs: list[TabConfig] = field(default_factory=list)
 
 
