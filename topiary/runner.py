@@ -69,14 +69,13 @@ def screen_to_rich(screen: pyte.Screen, trim_trailing: bool = False) -> Text:
     Optimised: coalesces same-style character runs into single spans and
     caches Style objects so only O(unique_styles) objects are created per
     render instead of O(rows × cols).
-    pyte's sparse buffer dict is used for fast empty-row detection.
+    Uses sparse row iteration: only cells explicitly written by the terminal
+    are visited; gaps are filled with a single space-run append.
     """
     text = Text(no_wrap=True, overflow="crop")
     last_content_row = screen.lines - 1
 
     if trim_trailing:
-        # pyte buffer rows are defaultdicts: only explicitly-written cells are
-        # present.  An empty row has no entries at all → fast O(1) check.
         for y in range(screen.lines - 1, -1, -1):
             row_map = screen.buffer[y]
             if row_map and any(c.data.strip() for c in row_map.values()):
@@ -86,35 +85,67 @@ def screen_to_rich(screen: pyte.Screen, trim_trailing: bool = False) -> Text:
             last_content_row = 0
 
     style_cache: dict[tuple, Style | None] = {}
+    default_char = pyte.screens.Char(" ")
+    default_key = _char_key(default_char)
 
     for y in range(last_content_row + 1):
         line = screen.buffer[y]
+
+        if not line:
+            # Completely empty row — single append of spaces
+            text.append(" " * screen.columns)
+            text.append("\n")
+            continue
+
+        # Sparse iteration: walk only the columns that matter
+        # Build sorted list of (col, char) for written cells, then fill gaps.
+        written = sorted(line.items())   # list of (x, Char)
+        prev_x = 0
         run_key: tuple | None = None
         run_chars: list[str] = []
 
-        for x in range(screen.columns):
-            char = line[x]
+        def _flush() -> None:
+            if not run_chars:
+                return
+            style = style_cache.get(run_key)
+            if style is None and run_key not in style_cache:
+                style = _key_to_style(run_key)   # type: ignore[arg-type]
+                style_cache[run_key] = style      # type: ignore[index]
+            text.append("".join(run_chars), style=style)
+            run_chars.clear()
+
+        for x, char in written:
+            # Fill gap before this cell with default spaces
+            if x > prev_x:
+                gap = x - prev_x
+                if run_key == default_key:
+                    run_chars.append(" " * gap)
+                else:
+                    _flush()
+                    run_key = default_key
+                    run_chars.append(" " * gap)
+
             key = _char_key(char)
             data = char.data or " "
             if key == run_key:
                 run_chars.append(data)
             else:
-                if run_chars:
-                    style = style_cache.get(run_key)  # type: ignore[arg-type]
-                    if style is None and run_key not in style_cache:
-                        style = _key_to_style(run_key)  # type: ignore[arg-type]
-                        style_cache[run_key] = style  # type: ignore[index]
-                    text.append("".join(run_chars), style=style)
+                _flush()
                 run_key = key
-                run_chars = [data]
+                run_chars.append(data)
+            prev_x = x + 1
 
-        if run_chars:
-            style = style_cache.get(run_key)  # type: ignore[arg-type]
-            if style is None and run_key not in style_cache:
-                style = _key_to_style(run_key)  # type: ignore[arg-type]
-                style_cache[run_key] = style  # type: ignore[index]
-            text.append("".join(run_chars), style=style)
+        # Fill trailing gap to end of line
+        if prev_x < screen.columns:
+            gap = screen.columns - prev_x
+            if run_key == default_key:
+                run_chars.append(" " * gap)
+            else:
+                _flush()
+                run_key = default_key
+                run_chars.append(" " * gap)
 
+        _flush()
         text.append("\n")
 
     return text
