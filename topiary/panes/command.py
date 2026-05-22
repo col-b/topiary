@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from textual.app import ComposeResult
+from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -11,6 +12,7 @@ from ..config import PaneConfig
 from ..runner import TerminalRunner
 
 _DEFAULT_RESTART_DELAY = 2.0  # seconds to wait before restarting after unexpected exit
+_SCROLLABLE_ROWS = 500        # virtual PTY height for scrollable panes
 
 
 class CommandPane(Widget):
@@ -25,6 +27,14 @@ class CommandPane(Widget):
     CommandPane > Static {
         width: 1fr;
         height: 1fr;
+    }
+    CommandPane > VerticalScroll {
+        width: 1fr;
+        height: 1fr;
+    }
+    CommandPane > VerticalScroll > Static {
+        width: 1fr;
+        height: auto;
     }
     """
 
@@ -44,7 +54,11 @@ class CommandPane(Widget):
         self._dirty: bool = False  # set by PTY callback; consumed by display timer
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="output", markup=False)
+        if self.pane_cfg.scrollable:
+            with VerticalScroll(id="scroll"):
+                yield Static("", id="output", markup=False)
+        else:
+            yield Static("", id="output", markup=False)
 
     def on_mount(self) -> None:
         self.styles.width = self.pane_cfg.width
@@ -78,8 +92,11 @@ class CommandPane(Widget):
                 self._runner = None
 
     async def _run_once(self) -> None:
-        rows = max(4, self.content_size.height) or 24
-        cols = max(10, self.content_size.width) or 80
+        if self.pane_cfg.scrollable:
+            rows, cols = _SCROLLABLE_ROWS, max(10, self.content_size.width) or 80
+        else:
+            rows = max(4, self.content_size.height) or 24
+            cols = max(10, self.content_size.width) or 80
         runner = TerminalRunner(
             self.pane_cfg.command or "echo 'no command configured'",
             rows,
@@ -102,16 +119,23 @@ class CommandPane(Widget):
         self._dirty = True
 
     def _maybe_refresh(self) -> None:
-        """Timer callback (~20 Hz): render only if new PTY data has arrived."""
-        if self._dirty and self._runner:
-            self._dirty = False
-            try:
-                self.query_one("#output", Static).update(self._runner.render())
-            except Exception:
-                pass
+        """Timer callback: render only if new PTY data has arrived since last frame."""
+        if not (self._dirty and self._runner):
+            return
+        self._dirty = False
+        try:
+            output = self.query_one("#output", Static)
+            output.update(self._runner.render(trim_trailing=self.pane_cfg.scrollable))
+            if self.pane_cfg.scrollable:
+                scroller = self.query_one("#scroll", VerticalScroll)
+                # Only auto-scroll if user hasn't manually scrolled up
+                if scroller.is_vertical_scroll_end:
+                    scroller.scroll_end(animate=False)
+        except Exception:
+            pass
 
     def on_resize(self) -> None:
-        if self._runner:
+        if self._runner and not self.pane_cfg.scrollable:
             self._runner.resize(
                 max(4, self.content_size.height) or 24,
                 max(10, self.content_size.width) or 80,

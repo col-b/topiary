@@ -24,6 +24,7 @@ class PaneConfig:
     refresh: int = 5
     min_width: int = 0  # collapse pane when terminal narrower than this
     cwd: str | None = None  # working directory for the command
+    scrollable: bool = False    # wrap output in a scrollable container
     tabs: list[TabConfig] = field(default_factory=list)
 
 

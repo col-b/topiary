@@ -38,10 +38,19 @@ def _pyte_color(color: str | None, bold: bool = False) -> str | None:
     return f"bright_{name}" if bold else name
 
 
-def screen_to_rich(screen: pyte.Screen) -> Text:
+def screen_to_rich(screen: pyte.Screen, trim_trailing: bool = False) -> Text:
     """Convert a pyte Screen buffer to a Rich Text object."""
     text = Text(no_wrap=True, overflow="crop")
-    for y in range(screen.lines):
+    last_content_row = screen.lines - 1
+    if trim_trailing:
+        # Find the last row that has any non-space character
+        for y in range(screen.lines - 1, -1, -1):
+            if any(screen.buffer[y][x].data.strip() for x in range(screen.columns)):
+                last_content_row = y
+                break
+        else:
+            last_content_row = 0
+    for y in range(last_content_row + 1):
         line = screen.buffer[y]
         for x in range(screen.columns):
             char = line[x]
@@ -92,8 +101,8 @@ class TerminalRunner:
     def exit_code(self) -> int | None:
         return self._proc.returncode if self._proc else None
 
-    def render(self) -> Text:
-        return screen_to_rich(self._screen)
+    def render(self, trim_trailing: bool = False) -> Text:
+        return screen_to_rich(self._screen, trim_trailing=trim_trailing)
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
