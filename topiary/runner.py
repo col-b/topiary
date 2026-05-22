@@ -139,24 +139,55 @@ class TerminalRunner:
             return await self._proc.wait()
         return -1
 
-    async def stop(self) -> None:
-        """Kill the process and close the PTY master."""
-        self._eof()  # remove reader, set done event
-        if self._proc and self._proc.returncode is None:
+    def kill_sync(self) -> None:
+        """Synchronously kill the process group and clean up all resources.
+
+        Uses no await so CancelledError cannot interrupt it.
+        Safe to call from on_unmount, __del__, or signal handlers.
+        """
+        # 1. Remove asyncio fd reader before closing the fd
+        loop = self._loop
+        if loop is not None and self._master_fd >= 0:
             try:
-                self._proc.terminate()
-                await asyncio.wait_for(self._proc.wait(), timeout=2.0)
-            except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                loop.remove_reader(self._master_fd)
+            except Exception:
+                pass
+
+        # 2. Unblock any pending wait()
+        if self._done and not self._done.is_set():
+            self._done.set()
+
+        # 3. Kill the process group (start_new_session makes child a group leader)
+        if self._proc is not None and self._proc.returncode is None:
+            pid = self._proc.pid
+            for sig in (signal.SIGTERM, signal.SIGKILL):
                 try:
-                    self._proc.kill()
+                    os.killpg(os.getpgid(pid), sig)
                 except (ProcessLookupError, OSError):
-                    pass
+                    try:
+                        os.kill(pid, sig)
+                    except (ProcessLookupError, OSError):
+                        pass
+
+        # 4. Close PTY master fd
         if self._master_fd >= 0:
             try:
                 os.close(self._master_fd)
             except OSError:
                 pass
             self._master_fd = -1
+
+        # 5. Break reference cycle: runner._on_update -> pane._mark_dirty -> runner
+        self._on_update = None
+
+    async def stop(self) -> None:
+        """kill_sync() then best-effort await process reap."""
+        self.kill_sync()
+        if self._proc is not None:
+            try:
+                await asyncio.wait_for(self._proc.wait(), timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, OSError):
+                pass
 
     # ------------------------------------------------------------------ #
     # Resize                                                               #

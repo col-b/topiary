@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections import deque
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
@@ -12,6 +15,10 @@ from ..config import PaneConfig
 from ..runner import TerminalRunner
 
 _SCROLLABLE_ROWS = 500  # virtual PTY height for scrollable panes
+
+# Module-level perf registry updated by every CommandPane on each render.
+# Keys are pane ids; read by PerfOverlay in app.py.
+PANE_PERF: dict[str, dict[str, Any]] = {}
 
 
 class CommandPane(Widget):
@@ -51,7 +58,14 @@ class CommandPane(Widget):
         self._show_border = show_border
         self._refresh_rate_hz = max(1.0, refresh_rate_hz)
         self._runner: TerminalRunner | None = None
-        self._dirty: bool = False  # set by PTY callback; consumed by display timer
+        self._dirty: bool = False
+        # perf counters
+        self._pty_updates: int = 0
+        self._render_count: int = 0
+        self._render_ms_total: float = 0.0
+        self._render_ms_max: float = 0.0
+        self._render_ms_last: float = 0.0
+        self._render_ts: deque[float] = deque(maxlen=60)  # timestamps of recent renders
 
     def compose(self) -> ComposeResult:
         if self.pane_cfg.scrollable:
@@ -69,24 +83,33 @@ class CommandPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
-        # Render at configured Hz; the PTY reader just sets _dirty between frames.
         self.set_interval(1 / self._refresh_rate_hz, self._maybe_refresh)
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
+
+    def on_unmount(self) -> None:
+        """Synchronously kill child process on widget removal or app exit.
+
+        Called by Textual for every descendant when any ancestor is removed,
+        so config-reload and 'q' both reliably clean up.
+        """
+        if self._runner is not None:
+            self._runner.kill_sync()
+            self._runner = None
 
     # ------------------------------------------------------------------ #
     # Run loop                                                             #
     # ------------------------------------------------------------------ #
 
     async def _run_loop(self) -> None:
-        """Run the command in a PTY. If refresh > 0, restart after that many seconds on exit.
-        If refresh == 0 (default), run once only — for long-running watcher commands."""
+        """Run once (refresh==0) or periodically (refresh>0)."""
         try:
             await self._run_once()
             while self.pane_cfg.refresh > 0:
                 await asyncio.sleep(self.pane_cfg.refresh)
                 await self._run_once()
         finally:
-            if self._runner:
+            # on_unmount may have already called kill_sync(); stop() is a no-op then.
+            if self._runner is not None:
                 await self._runner.stop()
                 self._runner = None
 
@@ -114,14 +137,20 @@ class CommandPane(Widget):
     # ------------------------------------------------------------------ #
 
     def _mark_dirty(self) -> None:
-        """Called by TerminalRunner on every PTY read — just flip the flag."""
+        """Called by TerminalRunner on every PTY read — O(1), just flip a flag."""
         self._dirty = True
+        self._pty_updates += 1
 
     def _maybe_refresh(self) -> None:
-        """Timer callback: render only if new PTY data has arrived since last frame."""
-        if not (self._dirty and self._runner):
+        """Timer callback: render only if new PTY data arrived AND pane is visible."""
+        if not self._dirty or self._runner is None:
+            return
+        # Skip rendering if pane is not visible (e.g. inactive tab).
+        # The dirty flag stays set so we render immediately on next visibility.
+        if not self.is_visible:
             return
         self._dirty = False
+        t0 = time.perf_counter()
         try:
             output = self.query_one("#output", Static)
             if self.pane_cfg.scrollable:
@@ -134,12 +163,36 @@ class CommandPane(Widget):
                 output.update(self._runner.render())
         except Exception:
             pass
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        self._record_perf(elapsed_ms)
+
+    def _record_perf(self, render_ms: float) -> None:
+        self._render_count += 1
+        self._render_ms_total += render_ms
+        self._render_ms_last = render_ms
+        if render_ms > self._render_ms_max:
+            self._render_ms_max = render_ms
+        now = time.monotonic()
+        self._render_ts.append(now)
+        # Compute render rate over last 10 seconds
+        cutoff = now - 10.0
+        recent = sum(1 for t in self._render_ts if t >= cutoff)
+        render_hz = recent / 10.0
+        PANE_PERF[self.pane_cfg.id] = {
+            "title": self.pane_cfg.title or self.pane_cfg.id,
+            "pty_updates": self._pty_updates,
+            "render_count": self._render_count,
+            "render_ms_last": render_ms,
+            "render_ms_avg": self._render_ms_total / self._render_count,
+            "render_ms_max": self._render_ms_max,
+            "render_hz": render_hz,
+            "visible": self.is_visible,
+        }
 
     def on_resize(self) -> None:
         if self._runner:
             cols = max(10, self.content_size.width) or 80
             if self.pane_cfg.scrollable:
-                # Keep the tall virtual rows; only sync the column width
                 self._runner.resize(_SCROLLABLE_ROWS, cols)
             else:
                 self._runner.resize(max(4, self.content_size.height) or 24, cols)

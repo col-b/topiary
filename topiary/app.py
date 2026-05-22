@@ -4,13 +4,65 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from rich.table import Table as RichTable
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widget import Widget
+from textual.widgets import Static
 
 from .config import AppConfig, PaneConfig, load_config
+from .panes.command import PANE_PERF
 from .panes.factory import make_pane
+
+
+class PerfOverlay(Static):
+    """Floating overlay showing per-pane render times. Toggle with 'd'."""
+
+    DEFAULT_CSS = """
+    PerfOverlay {
+        dock: right;
+        width: 62;
+        height: auto;
+        background: $surface;
+        border: round $warning;
+        padding: 0 1;
+        layer: overlay;
+        display: none;
+    }
+    """
+
+    def on_mount(self) -> None:
+        self.set_interval(1.0, self._refresh_stats)
+
+    def _refresh_stats(self) -> None:
+        if not self.display:
+            return
+        table = RichTable(title="Pane Perf (press d to close)", expand=True, show_lines=False)
+        table.add_column("Pane", style="cyan", max_width=16)
+        table.add_column("PTY/s", justify="right", style="dim")
+        table.add_column("Rndr/s", justify="right")
+        table.add_column("Last ms", justify="right")
+        table.add_column("Avg ms", justify="right")
+        table.add_column("Max ms", justify="right")
+        table.add_column("Vis", justify="center")
+        rows = sorted(PANE_PERF.items(), key=lambda x: -x[1].get("render_ms_last", 0))
+        for _pid, s in rows:
+            last = s["render_ms_last"]
+            avg = s["render_ms_avg"]
+            worst = s["render_ms_max"]
+            color = "red" if last > 50 else ("yellow" if last > 15 else "green")
+            table.add_row(
+                s["title"],
+                f"{s['pty_updates'] // max(1, s['render_count']):.0f}",
+                f"{s['render_hz']:.1f}",
+                f"[{color}]{last:.1f}[/{color}]",
+                f"{avg:.1f}",
+                f"{worst:.1f}",
+                "✓" if s["visible"] else "·",
+            )
+        self.update(table)
+
 
 
 class TopiaryApp(App):
@@ -31,6 +83,7 @@ class TopiaryApp(App):
         Binding("q", "quit", "Quit", priority=True),
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
         Binding("r", "action_reload", "Reload config"),
+        Binding("d", "toggle_perf", "Debug perf", show=False),
     ]
 
     def __init__(self, config: AppConfig, config_path: Path) -> None:
@@ -52,6 +105,7 @@ class TopiaryApp(App):
     # ------------------------------------------------------------------ #
 
     def compose(self) -> ComposeResult:
+        yield PerfOverlay(id="perf-overlay")
         for i, row_cfg in enumerate(self.config_data.rows):
             panes: list[Widget] = []
             for pane_cfg in row_cfg.panes:
@@ -119,6 +173,13 @@ class TopiaryApp(App):
     async def action_reload(self) -> None:
         """Manually force a config reload (same as saving the file)."""
         await self._reload_config()
+
+    def action_toggle_perf(self) -> None:
+        """Toggle the performance overlay."""
+        overlay = self.query_one("#perf-overlay", PerfOverlay)
+        overlay.display = not overlay.display
+        if overlay.display:
+            overlay._refresh_stats()
 
     # ------------------------------------------------------------------ #
     # Resize: collapse panes below their min_width                        #
