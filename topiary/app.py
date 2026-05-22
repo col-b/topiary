@@ -10,9 +10,7 @@ from textual.containers import Horizontal
 from textual.widget import Widget
 
 from .config import AppConfig, PaneConfig, load_config
-from .panes.command import CommandPane
-from .panes.system import SystemPane
-from .panes.tabs import TabsPane
+from .panes.factory import make_pane
 
 
 class TopiaryApp(App):
@@ -65,13 +63,7 @@ class TopiaryApp(App):
 
     def _make_pane(self, pane_cfg: PaneConfig) -> Widget:
         hz = self.config_data.refresh_rate_hz
-        match pane_cfg.type:
-            case "system":
-                return SystemPane(pane_cfg, id=pane_cfg.id)
-            case "tabs":
-                return TabsPane(pane_cfg, id=pane_cfg.id, refresh_rate_hz=hz)
-            case _:  # "command" and anything unknown
-                return CommandPane(pane_cfg, id=pane_cfg.id, refresh_rate_hz=hz)
+        return make_pane(pane_cfg, hz, id_prefix=pane_cfg.id or "pane")
 
     # ------------------------------------------------------------------ #
     # Config file watcher                                                  #
