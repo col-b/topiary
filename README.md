@@ -39,7 +39,7 @@ topiary                          # looks for ./topiary.toml or ~/.config/topiary
 | Key | Action |
 |-----|--------|
 | `q` / `ctrl+c` | Quit |
-| `r` | Force-refresh all panes immediately |
+| `r` | Force config reload (same as saving the file) |
 | Tab (in tabs pane) | Switch tabs |
 
 ## Config
@@ -99,11 +99,16 @@ height = "1fr"
 
 ### Tips
 
-- Use **one-shot** variants of commands (not `-w` watch mode) — topiary handles the
-  refresh loop itself via the `refresh` interval.
-- `COLUMNS` and `LINES` env vars are set to the pane's current dimensions before
-  each command run, so commands that respect them will format output correctly.
+- Use **watch-mode** commands (e.g. `ticker -w AUR`, `git_branch_tree -w`) when the command
+  supports it — topiary runs them in a real PTY so cursor-movement and color output works.
+- Use **one-shot** commands with `refresh = N` to re-run them every N seconds after they exit
+  (e.g. `command = "uptime"`, `refresh = 10`).
+- If a command exits unexpectedly and `refresh` is not set (or 0), topiary restarts it after 2
+  seconds automatically.
+- `TERM=xterm-256color` is set in the PTY environment, so commands that check it behave correctly.
 - Panes with `min_width` set automatically hide when the terminal is too narrow.
+- **Auto-reload**: topiary watches the config file for changes. Save the file and the layout
+  rebuilds live — no restart needed.
 
 ## Extending
 

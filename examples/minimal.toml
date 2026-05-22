@@ -19,4 +19,4 @@ height = "100%"
   title   = "Uptime / Load"
   command = "uptime && echo && df -h --output=target,used,avail,pcent | head -10"
   width   = "1fr"
-  refresh = 10
+  refresh = 10   # one-shot command: re-run 10 seconds after it exits

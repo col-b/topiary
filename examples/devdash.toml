@@ -18,9 +18,9 @@ height = "35%"
   id      = "ticker"
   type    = "command"
   title   = "Market"
-  command = "ticker AUR"          # install: go install github.com/achannarasappa/ticker
+  command = "ticker -w AUR"      # runs in watch mode; topiary restarts if it exits
   width   = "1fr"
-  refresh = 60
+  # refresh not set → restart after 2s if ticker exits unexpectedly
 
 # ── Row 2: git / PRs / reminders (tabbed) + optional log tail ──────────
 [[rows]]
@@ -32,7 +32,7 @@ height = "1fr"
   title = "Dev"
   width = "1fr"
   tabs = [
-    { title = "Git",     command = "git_branch_tree",      refresh = 10 },
-    { title = "PRs",     command = "git_branch_tree -p",   refresh = 30 },
-    { title = "Remind",  command = "remind",                refresh = 5  },
+    { title = "Git",     command = "git_branch_tree -w",    refresh = 0 },
+    { title = "PRs",     command = "git_branch_tree -p -w", refresh = 0 },
+    { title = "Remind",  command = "remind -w",              refresh = 0 },
   ]

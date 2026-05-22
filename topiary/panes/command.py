@@ -1,31 +1,30 @@
-"""CommandPane: runs an arbitrary shell command and displays its stdout."""
+"""CommandPane: runs any shell command in a PTY and displays its output."""
 from __future__ import annotations
 
 import asyncio
-import os
 
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
 from ..config import PaneConfig
+from ..runner import TerminalRunner
 
-# ANSI reset issued before each run so stale colour codes don't bleed over
-_ANSI_RESET = "\x1b[0m"
+_DEFAULT_RESTART_DELAY = 2.0  # seconds to wait before restarting after unexpected exit
 
 
 class CommandPane(Widget):
-    """Runs a shell command every `refresh` seconds and displays stdout."""
+    """Runs a shell command in a PTY; restarts after exit per `refresh` setting."""
 
     DEFAULT_CSS = """
     CommandPane {
         border: round $panel-lighten-2;
         padding: 0;
-        overflow: hidden scroll;
+        overflow: hidden;
     }
     CommandPane > Static {
-        width: 100%;
+        width: 1fr;
+        height: 1fr;
     }
     """
 
@@ -39,7 +38,7 @@ class CommandPane(Widget):
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
         self._show_border = show_border
-        self._running = False
+        self._runner: TerminalRunner | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="output", markup=False)
@@ -53,46 +52,56 @@ class CommandPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
-        # first run immediately, then on interval
-        self.run_worker(self._do_refresh(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
-        self.set_interval(self.pane_cfg.refresh, self._schedule_refresh)
+        self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
-    def _schedule_refresh(self) -> None:
-        if not self._running:
-            self.run_worker(
-                self._do_refresh(), exclusive=True, name=f"cmd-{self.pane_cfg.id}"
-            )
+    # ------------------------------------------------------------------ #
+    # Run loop                                                             #
+    # ------------------------------------------------------------------ #
 
-    async def _do_refresh(self) -> None:
-        if self._running:
-            return
-        self._running = True
+    async def _run_loop(self) -> None:
+        """Start the command, wait for it to exit, restart after delay — forever."""
         try:
-            output = await self._run_command()
-            text = Text.from_ansi(_ANSI_RESET + output)
-            self.query_one("#output", Static).update(text)
+            while True:
+                await self._run_once()
+                # refresh > 0  →  explicit interval between restarts
+                # refresh == 0 →  long-running command; brief safety delay before restart
+                delay = self.pane_cfg.refresh if self.pane_cfg.refresh > 0 else _DEFAULT_RESTART_DELAY
+                await asyncio.sleep(delay)
         finally:
-            self._running = False
+            if self._runner:
+                await self._runner.stop()
+                self._runner = None
 
-    async def _run_command(self) -> str:
-        if not self.pane_cfg.command:
-            return "[dim]No command configured[/dim]"
-        env = {
-            **os.environ,
-            "TERM": "xterm-256color",
-            "COLUMNS": str(max(10, self.content_size.width)),
-            "LINES": str(max(4, self.content_size.height)),
-        }
+    async def _run_once(self) -> None:
+        rows = max(4, self.content_size.height) or 24
+        cols = max(10, self.content_size.width) or 80
+        runner = TerminalRunner(
+            self.pane_cfg.command or "echo 'no command configured'",
+            rows,
+            cols,
+        )
+        self._runner = runner
         try:
-            proc = await asyncio.create_subprocess_shell(
-                self.pane_cfg.command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env,
+            await runner.start(on_update=self._refresh_display)
+            await runner.wait()
+        finally:
+            self._runner = None
+            await runner.stop()
+
+    # ------------------------------------------------------------------ #
+    # Display + resize                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _refresh_display(self) -> None:
+        if self._runner:
+            try:
+                self.query_one("#output", Static).update(self._runner.render())
+            except Exception:
+                pass
+
+    def on_resize(self) -> None:
+        if self._runner:
+            self._runner.resize(
+                max(4, self.content_size.height) or 24,
+                max(10, self.content_size.width) or 80,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-            return stdout.decode("utf-8", errors="replace")
-        except asyncio.TimeoutError:
-            return "\x1b[31mCommand timed out after 30 s\x1b[0m"
-        except Exception as exc:
-            return f"\x1b[31mError: {exc}\x1b[0m"

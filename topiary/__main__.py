@@ -35,7 +35,7 @@ def main() -> None:
         print(f"Error loading config: {e}", file=sys.stderr)
         sys.exit(1)
 
-    app = TopiaryApp(config)
+    app = TopiaryApp(config, config_path)
     app.run()
 
 
