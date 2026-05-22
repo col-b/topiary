@@ -2,18 +2,59 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from rich.table import Table as RichTable
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Static, TabbedContent, TabPane
 
 from .config import AppConfig, PaneConfig, load_config
 from .panes.command import PANE_PERF
 from .panes.factory import make_pane
+
+
+# ── PTY key map for passthrough mode ─────────────────────────────────────────
+
+_KEY_TO_PTY: dict[str, bytes] = {
+    "enter":      b"\r",
+    "tab":        b"\t",
+    "shift+tab":  b"\x1b[Z",
+    "backspace":  b"\x7f",
+    "delete":     b"\x1b[3~",
+    "up":         b"\x1b[A",
+    "down":       b"\x1b[B",
+    "right":      b"\x1b[C",
+    "left":       b"\x1b[D",
+    "home":       b"\x1b[H",
+    "end":        b"\x1b[F",
+    "page_up":    b"\x1b[5~",
+    "page_down":  b"\x1b[6~",
+    "ctrl+a": b"\x01", "ctrl+b": b"\x02", "ctrl+c": b"\x03",
+    "ctrl+d": b"\x04", "ctrl+e": b"\x05", "ctrl+f": b"\x06",
+    "ctrl+g": b"\x07", "ctrl+h": b"\x08", "ctrl+k": b"\x0b",
+    "ctrl+l": b"\x0c", "ctrl+n": b"\x0e", "ctrl+o": b"\x0f",
+    "ctrl+p": b"\x10", "ctrl+q": b"\x11", "ctrl+r": b"\x12",
+    "ctrl+s": b"\x13", "ctrl+t": b"\x14", "ctrl+u": b"\x15",
+    "ctrl+v": b"\x16", "ctrl+w": b"\x17", "ctrl+x": b"\x18",
+    "ctrl+y": b"\x19", "ctrl+z": b"\x1a",
+    "f1": b"\x1bOP",  "f2": b"\x1bOQ",  "f3": b"\x1bOR",  "f4": b"\x1bOS",
+    "f5": b"\x1b[15~", "f6": b"\x1b[17~", "f7": b"\x1b[18~", "f8": b"\x1b[19~",
+    "f9": b"\x1b[20~", "f10": b"\x1b[21~", "f11": b"\x1b[23~", "f12": b"\x1b[24~",
+}
+
+
+def _key_to_pty_bytes(event: events.Key) -> bytes | None:
+    """Convert a Textual Key event to PTY bytes for passthrough mode."""
+    if event.key in _KEY_TO_PTY:
+        return _KEY_TO_PTY[event.key]
+    if event.character and len(event.character) == 1:
+        return event.character.encode("utf-8")
+    return None
 
 
 class PerfOverlay(Static):
@@ -75,19 +116,39 @@ class TopiaryApp(App):
         layout: horizontal;
         width: 100%;
     }
+    .pane-focused {
+        border: round $accent;
+        border-title-color: $accent;
+        border-title-style: bold;
+    }
+    .pane-active {
+        border: round $success;
+        border-title-color: $success;
+        border-title-style: bold;
+    }
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
-        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
-        Binding("r", "action_reload", "Reload config"),
-        Binding("d", "toggle_perf", "Debug perf", show=False),
+        Binding("q",         "quit",             "Quit",        priority=True),
+        Binding("ctrl+c",    "quit",             "Quit",        show=False, priority=True),
+        Binding("r",         "action_reload",    "Reload"),
+        Binding("d",         "toggle_perf",      "Perf",        show=False),
+        Binding("tab",       "focus_next_pane",  "Next pane",   priority=True, show=False),
+        Binding("shift+tab", "focus_prev_pane",  "Prev pane",   priority=True, show=False),
+        Binding("enter",     "activate_pane",    "Interact",    show=False),
+        Binding("escape",    "deactivate_pane",  "Exit",        priority=True, show=False),
     ]
 
     def __init__(self, config: AppConfig, config_path: Path) -> None:
         super().__init__()
         self.config_data = config
         self.config_path = config_path
+        self._focused_pane: Widget | None = None
+        # In passthrough mode all keys are forwarded to _passthrough_target's PTY.
+        # _passthrough_target may differ from _focused_pane when a TabsPane is focused
+        # (we route into its active inner CommandPane).
+        self._passthrough: bool = False
+        self._passthrough_target: Widget | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
@@ -145,6 +206,7 @@ class TopiaryApp(App):
             return
 
         self.config_data = new_config
+        self._set_focused_pane(None)  # stale widget refs after rebuild
 
         # Remove all existing rows (Textual cancels their workers on removal)
         for row in list(self.query(".row")):
@@ -178,6 +240,158 @@ class TopiaryApp(App):
         overlay.display = not overlay.display
         if overlay.display:
             overlay._refresh_stats()
+
+    # -- Pane focus --------------------------------------------------------
+
+    def action_focus_next_pane(self) -> None:
+        """Tab → advance focus highlight to the next pane."""
+        panes = self._collect_focusable()
+        if not panes:
+            return
+        if self._focused_pane not in panes:
+            idx = 0
+        else:
+            idx = (panes.index(self._focused_pane) + 1) % len(panes)
+        self._set_focused_pane(panes[idx])
+
+    def action_focus_prev_pane(self) -> None:
+        """Shift+Tab → move focus highlight to the previous pane."""
+        panes = self._collect_focusable()
+        if not panes:
+            return
+        if self._focused_pane not in panes:
+            idx = len(panes) - 1
+        else:
+            idx = (panes.index(self._focused_pane) - 1) % len(panes)
+        self._set_focused_pane(panes[idx])
+
+    def action_activate_pane(self) -> None:
+        """Enter → start passthrough on the focused CommandPane (or its active tab)."""
+        from .panes.command import CommandPane
+        from .panes.tabs import TabsPane
+
+        if self._focused_pane is None:
+            return
+
+        # For TabsPane, route into the active tab's inner CommandPane
+        target: Widget = self._focused_pane
+        if isinstance(target, TabsPane):
+            target = self._get_active_tab_pane(target) or target
+
+        if not isinstance(target, CommandPane):
+            return
+        if target._runner is None:
+            return
+
+        self._passthrough = True
+        self._passthrough_target = target
+        # Visual: focused pane (may be a TabsPane wrapper) turns green
+        self._focused_pane.remove_class("pane-focused")
+        self._focused_pane.add_class("pane-active")
+        # Title indicator on the target pane
+        saved = target.border_title or ""
+        target._passthrough_title_saved = saved
+        if saved:
+            target.border_title = f"▶ {saved}"
+
+    def action_deactivate_pane(self) -> None:
+        """Escape → exit passthrough → focused; second Escape → unfocus."""
+        if self._passthrough:
+            self._passthrough = False
+            # Restore title on the target pane
+            t = self._passthrough_target
+            if t is not None:
+                saved = getattr(t, "_passthrough_title_saved", None)
+                if saved is not None:
+                    t.border_title = saved
+            self._passthrough_target = None
+            # Back to focused (highlighted) state
+            if self._focused_pane is not None:
+                self._focused_pane.remove_class("pane-active")
+                self._focused_pane.add_class("pane-focused")
+        elif self._focused_pane is not None:
+            self._set_focused_pane(None)
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        """Block app bindings in passthrough mode so keys flow to on_key → PTY."""
+        if self._passthrough:
+            # Only deactivate_pane escapes passthrough; everything else → on_key
+            return action == "deactivate_pane"
+        # Hide the deactivate binding from the footer when there's nothing to exit
+        if action == "deactivate_pane":
+            return self._focused_pane is not None
+        return True
+
+    def on_key(self, event: events.Key) -> None:
+        """Forward all keystrokes to the active PTY in passthrough mode."""
+        if not self._passthrough or self._passthrough_target is None:
+            return
+        from .panes.command import CommandPane
+        if not isinstance(self._passthrough_target, CommandPane):
+            return
+        # Escape is handled by the deactivate_pane binding (fires before on_key)
+        if event.key == "escape":
+            return
+        runner = self._passthrough_target._runner
+        if runner is None or runner._master_fd < 0:
+            return
+        key_bytes = _key_to_pty_bytes(event)
+        if key_bytes is not None:
+            try:
+                os.write(runner._master_fd, key_bytes)
+            except OSError:
+                pass
+        event.stop()
+
+    # -- Focus helpers -----------------------------------------------------
+
+    def _collect_focusable(self) -> list[Widget]:
+        """Walk the widget tree and collect top-level CommandPane + TabsPane instances.
+
+        SplitPane and Horizontal are transparent to focus (we recurse through them).
+        TabsPane is treated as a single focusable unit (not recursed into).
+        """
+        from .panes.command import CommandPane
+        from .panes.tabs import TabsPane
+
+        result: list[Widget] = []
+
+        def walk(widget: Widget) -> None:
+            for child in widget.children:
+                if not child.display:
+                    continue
+                if isinstance(child, CommandPane):
+                    result.append(child)
+                elif isinstance(child, TabsPane):
+                    result.append(child)
+                else:
+                    walk(child)
+
+        walk(self.screen)
+        return result
+
+    def _set_focused_pane(self, widget: Widget | None) -> None:
+        """Set visual focus highlight; clears passthrough as a side-effect."""
+        if self._focused_pane is not None:
+            self._focused_pane.remove_class("pane-focused", "pane-active")
+        self._focused_pane = widget
+        self._passthrough = False
+        self._passthrough_target = None
+        if widget is not None:
+            widget.add_class("pane-focused")
+
+    def _get_active_tab_pane(self, tabs_pane: Widget) -> Widget | None:
+        """Return the active tab's inner CommandPane from a TabsPane."""
+        from .panes.command import CommandPane
+        try:
+            tc = tabs_pane.query_one(TabbedContent)
+            active_id = tc.active  # e.g. "dev--glam"
+            if not active_id:
+                return None
+            inner = tabs_pane.query_one(f"#inner-{active_id}")
+            return inner if isinstance(inner, CommandPane) else None
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------ #
     # Resize: collapse panes below their min_width                        #
