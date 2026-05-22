@@ -48,7 +48,7 @@ class SystemPane(Widget):
 
     DEFAULT_CSS = """
     SystemPane {
-        border: round $accent;
+        border: round $panel-lighten-2;
         padding: 0 1;
         overflow: hidden;
     }
