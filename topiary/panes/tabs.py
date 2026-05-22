@@ -1,4 +1,4 @@
-"""TabsPane: a group of tabbed command panes."""
+"""TabsPane: a group of tabbed panes (any type, nestable)."""
 from __future__ import annotations
 
 from textual.app import ComposeResult
@@ -7,10 +7,11 @@ from textual.widgets import TabbedContent, TabPane
 
 from ..config import PaneConfig
 from .command import CommandPane
+from .system import SystemPane
 
 
 class TabsPane(Widget):
-    """A pane that contains multiple named tabs, each running a command."""
+    """A pane containing named tabs; each tab can be any pane type, including tabs."""
 
     DEFAULT_CSS = """
     TabsPane {
@@ -29,6 +30,16 @@ class TabsPane(Widget):
         height: 1fr;
         border: none;
     }
+    TabsPane SystemPane {
+        width: 1fr;
+        height: 1fr;
+        border: none;
+    }
+    TabsPane TabsPane {
+        width: 1fr;
+        height: 1fr;
+        border: none;
+    }
     """
 
     def __init__(self, pane_cfg: PaneConfig, *, refresh_rate_hz: float = 20.0, **kwargs) -> None:
@@ -39,18 +50,23 @@ class TabsPane(Widget):
     def compose(self) -> ComposeResult:
         with TabbedContent():
             for tab_cfg in self.pane_cfg.tabs:
-                # Build a minimal PaneConfig per tab (no outer border)
-                inner_cfg = PaneConfig(
-                    id=f"{self.pane_cfg.id}--{tab_cfg.title.lower().replace(' ', '-')}",
-                    type="command",
-                    title=tab_cfg.title,
-                    command=tab_cfg.command,
-                    refresh=tab_cfg.refresh,
-                    cwd=tab_cfg.cwd,
-                    width="1fr",
-                )
-                with TabPane(tab_cfg.title, id=inner_cfg.id):
-                    yield CommandPane(inner_cfg, show_border=False, refresh_rate_hz=self._refresh_rate_hz, id=f"cmd-{inner_cfg.id}")
+                # Fill in id and width defaults for inline tab entries
+                tab_cfg.width = "1fr"
+                if not tab_cfg.id:
+                    tab_cfg.id = f"{self.pane_cfg.id}--{tab_cfg.title.lower().replace(' ', '-')}"
+                tab_id = tab_cfg.id
+                with TabPane(tab_cfg.title or tab_cfg.id, id=tab_id):
+                    yield self._make_inner_pane(tab_cfg)
+
+    def _make_inner_pane(self, cfg: PaneConfig) -> Widget:
+        hz = self._refresh_rate_hz
+        match cfg.type:
+            case "system":
+                return SystemPane(cfg, id=f"inner-{cfg.id}")
+            case "tabs":
+                return TabsPane(cfg, refresh_rate_hz=hz, id=f"inner-{cfg.id}")
+            case _:
+                return CommandPane(cfg, show_border=False, refresh_rate_hz=hz, id=f"inner-{cfg.id}")
 
     def on_mount(self) -> None:
         self.styles.width = self.pane_cfg.width
