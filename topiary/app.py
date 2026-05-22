@@ -362,6 +362,7 @@ class TopiaryApp(App):
         TabsPane is treated as a single focusable unit (not recursed into).
         """
         from .panes.command import CommandPane
+        from .panes.system import SystemPane
         from .panes.tabs import TabsPane
 
         result: list[Widget] = []
@@ -370,9 +371,7 @@ class TopiaryApp(App):
             for child in widget.children:
                 if not child.display:
                     continue
-                if isinstance(child, CommandPane):
-                    result.append(child)
-                elif isinstance(child, TabsPane):
+                if isinstance(child, (CommandPane, TabsPane, SystemPane)):
                     result.append(child)
                 else:
                     walk(child)
