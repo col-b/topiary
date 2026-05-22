@@ -39,6 +39,7 @@ class CommandPane(Widget):
         self.pane_cfg = pane_cfg
         self._show_border = show_border
         self._runner: TerminalRunner | None = None
+        self._dirty: bool = False  # set by PTY callback; consumed by display timer
 
     def compose(self) -> ComposeResult:
         yield Static("", id="output", markup=False)
@@ -52,6 +53,8 @@ class CommandPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
+        # Render at ~20 Hz; the PTY reader just sets _dirty between frames.
+        self.set_interval(1 / 20, self._maybe_refresh)
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
     # ------------------------------------------------------------------ #
@@ -82,7 +85,7 @@ class CommandPane(Widget):
         )
         self._runner = runner
         try:
-            await runner.start(on_update=self._refresh_display, cwd=self.pane_cfg.cwd)
+            await runner.start(on_update=self._mark_dirty, cwd=self.pane_cfg.cwd)
             await runner.wait()
         finally:
             self._runner = None
@@ -92,8 +95,14 @@ class CommandPane(Widget):
     # Display + resize                                                     #
     # ------------------------------------------------------------------ #
 
-    def _refresh_display(self) -> None:
-        if self._runner:
+    def _mark_dirty(self) -> None:
+        """Called by TerminalRunner on every PTY read — just flip the flag."""
+        self._dirty = True
+
+    def _maybe_refresh(self) -> None:
+        """Timer callback (~20 Hz): render only if new PTY data has arrived."""
+        if self._dirty and self._runner:
+            self._dirty = False
             try:
                 self.query_one("#output", Static).update(self._runner.render())
             except Exception:
