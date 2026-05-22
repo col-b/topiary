@@ -297,6 +297,7 @@ class TopiaryApp(App):
     def action_deactivate_pane(self) -> None:
         """Escape → exit passthrough → focused; second Escape → unfocus."""
         if self._passthrough:
+            from .panes.command import CommandPane
             # Signal the PTY process to clear any interactive selection state.
             t = self._passthrough_target
             if t is not None and isinstance(t, CommandPane):
