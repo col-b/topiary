@@ -147,7 +147,7 @@ class CommandPane(Widget):
             return
         # Skip rendering if pane is not visible (e.g. inactive tab).
         # The dirty flag stays set so we render immediately on next visibility.
-        if not self.is_visible:
+        if not self.visible:
             return
         self._dirty = False
         t0 = time.perf_counter()
@@ -186,7 +186,7 @@ class CommandPane(Widget):
             "render_ms_avg": self._render_ms_total / self._render_count,
             "render_ms_max": self._render_ms_max,
             "render_hz": render_hz,
-            "visible": self.is_visible,
+            "visible": self.visible,
         }
 
     def on_resize(self) -> None:
