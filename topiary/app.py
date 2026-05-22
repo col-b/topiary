@@ -323,25 +323,35 @@ class TopiaryApp(App):
         return True
 
     def on_key(self, event: events.Key) -> None:
-        """Forward all keystrokes to the active PTY in passthrough mode."""
-        if not self._passthrough or self._passthrough_target is None:
-            return
-        from .panes.command import CommandPane
-        if not isinstance(self._passthrough_target, CommandPane):
-            return
-        # Escape is handled by the deactivate_pane binding (fires before on_key)
-        if event.key == "escape":
-            return
-        runner = self._passthrough_target._runner
-        if runner is None or runner._master_fd < 0:
-            return
-        key_bytes = _key_to_pty_bytes(event)
-        if key_bytes is not None:
-            try:
-                os.write(runner._master_fd, key_bytes)
-            except OSError:
-                pass
-        event.stop()
+        """In passthrough mode: forward all keys to PTY.
+        In focused (nav) mode: scroll the pane with arrow/page keys.
+        """
+        if self._passthrough:
+            if self._passthrough_target is None:
+                return
+            from .panes.command import CommandPane
+            if not isinstance(self._passthrough_target, CommandPane):
+                return
+            # Escape handled by deactivate_pane binding (fires before on_key)
+            if event.key == "escape":
+                return
+            runner = self._passthrough_target._runner
+            if runner is None or runner._master_fd < 0:
+                return
+            key_bytes = _key_to_pty_bytes(event)
+            if key_bytes is not None:
+                try:
+                    os.write(runner._master_fd, key_bytes)
+                except OSError:
+                    pass
+            event.stop()
+
+        elif self._focused_pane is not None:
+            # Scroll the focused pane with arrow / page keys (no passthrough needed)
+            _SCROLL_KEYS = {"up", "down", "page_up", "page_down", "home", "end"}
+            if event.key in _SCROLL_KEYS:
+                self._scroll_focused_pane(event.key)
+                event.stop()
 
     # -- Focus helpers -----------------------------------------------------
 
@@ -379,6 +389,29 @@ class TopiaryApp(App):
         self._passthrough_target = None
         if widget is not None:
             widget.add_class("pane-focused")
+
+    def _scroll_focused_pane(self, key: str) -> None:
+        """Scroll the VerticalScroll of the focused pane (or its active tab)."""
+        from .panes.command import CommandPane
+        from .panes.tabs import TabsPane
+        from textual.containers import VerticalScroll
+
+        pane = self._focused_pane
+        if isinstance(pane, TabsPane):
+            pane = self._get_active_tab_pane(pane) or pane
+        if not isinstance(pane, CommandPane):
+            return
+        try:
+            scroller = pane.query_one(VerticalScroll)
+        except Exception:
+            return  # non-scrollable pane — nothing to do
+        match key:
+            case "up":        scroller.scroll_up(animate=False)
+            case "down":      scroller.scroll_down(animate=False)
+            case "page_up":   scroller.scroll_page_up(animate=False)
+            case "page_down": scroller.scroll_page_down(animate=False)
+            case "home":      scroller.scroll_home(animate=False)
+            case "end":       scroller.scroll_end(animate=False)
 
     def _get_active_tab_pane(self, tabs_pane: Widget) -> Widget | None:
         """Return the active tab's inner CommandPane from a TabsPane."""
