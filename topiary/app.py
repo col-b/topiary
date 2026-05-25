@@ -242,9 +242,20 @@ class TopiaryApp(App):
         await self._reload_config()
 
     async def action_restart_pane(self) -> None:
-        """Ctrl+R — kill and restart the focused pane's command."""
+        """Ctrl+R — in passthrough: forward \\x12 to PTY; when focused: restart command."""
         from .panes.command import CommandPane
         from .panes.tabs import TabsPane
+
+        if self._passthrough:
+            t = self._passthrough_target
+            if t is not None and isinstance(t, CommandPane):
+                runner = t._runner
+                if runner is not None and runner._master_fd >= 0:
+                    try:
+                        os.write(runner._master_fd, b"\x12")
+                    except OSError:
+                        pass
+            return
 
         if self._focused_pane is None:
             return
@@ -351,8 +362,8 @@ class TopiaryApp(App):
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         """Block app bindings in passthrough mode so keys flow to on_key → PTY."""
         if self._passthrough:
-            # Only deactivate_pane escapes passthrough; everything else → on_key
-            return action == "deactivate_pane"
+            # deactivate_pane exits passthrough; restart_pane forwards \x12 to PTY
+            return action in ("deactivate_pane", "restart_pane")
         # These actions require a focused pane; hide them otherwise
         if action in ("deactivate_pane", "restart_pane"):
             return self._focused_pane is not None
