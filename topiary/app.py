@@ -14,6 +14,7 @@ from textual.widget import Widget
 from textual.widgets import Static, TabbedContent, TabPane
 
 from .config import AppConfig, PaneConfig, load_config
+from .log import log
 from .panes.command import PANE_PERF
 from .panes.factory import make_pane
 
@@ -157,6 +158,9 @@ class TopiaryApp(App):
     def on_mount(self) -> None:
         self.title = self.config_data.title
         self.screen.styles.background = self.config_data.background
+        pane_count = sum(len(r.panes) for r in self.config_data.rows)
+        log.info("app mounted  panes=%d  refresh_rate=%.1fhz  title=%r",
+                 pane_count, self.config_data.refresh_rate_hz, self.config_data.title)
         self.run_worker(self._watch_config(), exclusive=True, name="config-watcher")
 
     # ------------------------------------------------------------------ #
@@ -199,9 +203,11 @@ class TopiaryApp(App):
                 await self._reload_config()
 
     async def _reload_config(self) -> None:
+        log.info("reloading config  path=%s", self.config_path)
         try:
             new_config = load_config(self.config_path)
         except Exception as exc:
+            log.warning("config reload failed: %s", exc)
             self.notify(f"Config error: {exc}", severity="error", timeout=6)
             return
 
@@ -285,6 +291,7 @@ class TopiaryApp(App):
 
         self._passthrough = True
         self._passthrough_target = target
+        log.debug("passthrough ON  pane=%s", target.id)
         # Visual: focused pane (may be a TabsPane wrapper) turns green
         self._focused_pane.remove_class("pane-focused")
         self._focused_pane.add_class("pane-active")
@@ -308,6 +315,7 @@ class TopiaryApp(App):
                     except OSError:
                         pass
             self._passthrough = False
+            log.debug("passthrough OFF  pane=%s", t.id if t else "none")
             # Restore title on the target pane
             if t is not None:
                 saved = getattr(t, "_passthrough_title_saved", None)

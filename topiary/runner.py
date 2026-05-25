@@ -14,6 +14,8 @@ import pyte
 from rich.style import Style
 from rich.text import Text
 
+from .log import log
+
 # pyte's basic-8 color names → Rich color names
 _NAMED = {
     "black": "black",
@@ -185,6 +187,7 @@ class TerminalRunner:
         self._on_update: Callable | None = None
         self._done: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.bytes_received: int = 0   # total PTY bytes; read by CommandPane for logging
 
     # ------------------------------------------------------------------ #
     # Properties                                                           #
@@ -231,6 +234,8 @@ class TerminalRunner:
         )
         os.close(slave_fd)
         self._loop.add_reader(self._master_fd, self._on_data)
+        log.debug("runner start  pid=%d  rows=%d cols=%d  cmd=%.80s",
+                  self._proc.pid, self.rows, self.cols, self.command)
 
     async def wait(self) -> int:
         """Block until the PTY is closed (process exited)."""
@@ -324,6 +329,7 @@ class TerminalRunner:
             data = os.read(self._master_fd, 16384)
             if data:
                 self._pyte_stream.feed(data)
+                self.bytes_received += len(data)
                 if self._on_update:
                     self._on_update()
             else:

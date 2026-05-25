@@ -12,6 +12,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from ..config import PaneConfig
+from ..log import log
 from ..runner import TerminalRunner
 
 _SCROLLABLE_ROWS = 200  # virtual PTY height for scrollable panes
@@ -66,6 +67,8 @@ class CommandPane(Widget):
         self._render_ms_max: float = 0.0
         self._render_ms_last: float = 0.0
         self._render_ts: deque[float] = deque(maxlen=60)  # timestamps of recent renders
+        self._log = log.getChild(f"pane.{pane_cfg.id}")
+        self._last_log_ts: float = 0.0   # monotonic time of last periodic perf log
 
     def compose(self) -> ComposeResult:
         if self.pane_cfg.scrollable:
@@ -102,23 +105,25 @@ class CommandPane(Widget):
 
     async def _run_loop(self) -> None:
         """Run once (refresh==0) or periodically (refresh>0)."""
+        self._log.info("pane starting  cmd=%.80s", self.pane_cfg.command or "(none)")
+        run_index = 0
         try:
-            await self._run_once()
+            await self._run_once(run_index)
             while self.pane_cfg.refresh > 0:
+                run_index += 1
                 await asyncio.sleep(self.pane_cfg.refresh)
-                await self._run_once()
+                await self._run_once(run_index)
+        except Exception:
+            self._log.exception("unhandled error in _run_loop")
         finally:
-            # on_unmount may have already called kill_sync(); stop() is a no-op then.
             if self._runner is not None:
                 await self._runner.stop()
                 self._runner = None
 
-    async def _run_once(self) -> None:
+    async def _run_once(self, run_index: int = 0) -> None:
         if self.pane_cfg.scrollable:
             rows, cols = _SCROLLABLE_ROWS, max(10, self.content_size.width or 80)
         else:
-            # Use sensible defaults when widget hasn't been laid out yet
-            # (e.g. inactive tab has content_size (0,0))
             rows = max(4, self.content_size.height or 24)
             cols = max(10, self.content_size.width or 80)
         runner = TerminalRunner(
@@ -127,12 +132,21 @@ class CommandPane(Widget):
             cols,
         )
         self._runner = runner
+        t_start = time.monotonic()
         try:
             await runner.start(on_update=self._mark_dirty, cwd=self.pane_cfg.cwd)
             await runner.wait()
+            elapsed = time.monotonic() - t_start
+            self._log.info(
+                "run #%d finished  exit=%s  elapsed=%.1fs  pty_bytes=%d",
+                run_index,
+                runner.exit_code,
+                elapsed,
+                runner.bytes_received,
+            )
+        except Exception:
+            self._log.exception("error in _run_once #%d", run_index)
         finally:
-            # Fast commands (df -h, gcal) can exit before the first timer tick.
-            # Do one final render here so output is never silently lost.
             if self._dirty:
                 try:
                     text = runner.render(trim_trailing=self.pane_cfg.scrollable)
@@ -161,6 +175,7 @@ class CommandPane(Widget):
         try:
             rich_text = self._runner.render(trim_trailing=self.pane_cfg.scrollable)
         except Exception:
+            self._log.exception("error in render()")
             return
         t1 = time.perf_counter()
         try:
@@ -174,7 +189,8 @@ class CommandPane(Widget):
             else:
                 output.update(rich_text)
         except Exception:
-            pass
+            self._log.exception("error in Static.update()")
+            return
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._record_perf(elapsed_ms, (t1 - t0) * 1000)
 
@@ -189,6 +205,7 @@ class CommandPane(Widget):
         cutoff = now - 10.0
         recent = sum(1 for t in self._render_ts if t >= cutoff)
         render_hz = recent / 10.0
+        update_ms = elapsed_ms - render_ms
         PANE_PERF[self.pane_cfg.id] = {
             "title": self.pane_cfg.title or self.pane_cfg.id,
             "pty_updates": self._pty_updates,
@@ -196,11 +213,26 @@ class CommandPane(Widget):
             "render_ms_last": elapsed_ms,
             "render_ms_avg": self._render_ms_total / self._render_count,
             "render_ms_max": self._render_ms_max,
-            "s2r_ms": render_ms,       # screen_to_rich() alone
-            "update_ms": elapsed_ms - render_ms,  # Static.update() alone
+            "s2r_ms": render_ms,
+            "update_ms": update_ms,
             "render_hz": render_hz,
             "visible": self.visible,
         }
+        # Periodic perf summary to log (every 30s)
+        if now - self._last_log_ts >= 30.0:
+            self._last_log_ts = now
+            pty_bytes = self._runner.bytes_received if self._runner else 0
+            self._log.info(
+                "perf  render=%.1f/s  s2r=%.1fms  upd=%.1fms  tot=%.1fms  "
+                "max=%.1fms  pty_updates=%d  pty_bytes=%d",
+                render_hz,
+                render_ms,
+                update_ms,
+                elapsed_ms,
+                self._render_ms_max,
+                self._pty_updates,
+                pty_bytes,
+            )
 
     def on_resize(self) -> None:
         if self._runner:

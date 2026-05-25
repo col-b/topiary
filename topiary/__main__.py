@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .app import TopiaryApp
 from .config import load_config
+from .log import log, setup as setup_logging
 
 
 def main() -> None:
@@ -29,14 +30,20 @@ def main() -> None:
             "directory or ~/.config/topiary/topiary.toml"
         )
 
+    setup_logging()
+    log.info("=" * 60)
+    log.info("topiary starting  config=%s", config_path)
+
     try:
         config = load_config(config_path)
     except Exception as e:
+        log.exception("Failed to load config: %s", e)
         print(f"Error loading config: {e}", file=sys.stderr)
         sys.exit(1)
 
     app = TopiaryApp(config, config_path)
     app.run()
+    log.info("topiary exited cleanly")
 
 
 def _resolve_config(explicit: Path | None) -> Path | None:
