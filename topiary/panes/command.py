@@ -90,14 +90,27 @@ class CommandPane(Widget):
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
     def on_unmount(self) -> None:
-        """Synchronously kill child process on widget removal or app exit.
-
-        Called by Textual for every descendant when any ancestor is removed,
-        so config-reload and 'q' both reliably clean up.
-        """
+        """Synchronously kill child process on widget removal or app exit."""
         if self._runner is not None:
             self._runner.kill_sync()
             self._runner = None
+
+    async def restart(self) -> None:
+        """Kill the running process and restart the run loop from scratch."""
+        self._log.info("restart requested")
+        if self._runner is not None:
+            self._runner.kill_sync()
+            self._runner = None
+        self._dirty = False
+        # Reset perf counters so stats reflect the new process, not the old one
+        self._pty_updates = 0
+        self._render_count = 0
+        self._render_ms_total = 0.0
+        self._render_ms_max = 0.0
+        self._render_ms_last = 0.0
+        self._last_log_ts = 0.0
+        # exclusive=True cancels any still-running worker with the same group
+        self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
     # ------------------------------------------------------------------ #
     # Run loop                                                             #

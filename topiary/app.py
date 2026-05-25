@@ -133,6 +133,7 @@ class TopiaryApp(App):
         Binding("q",         "quit",             "Quit",        priority=True),
         Binding("ctrl+c",    "quit",             "Quit",        show=False, priority=True),
         Binding("r",         "action_reload",    "Reload"),
+        Binding("ctrl+r",    "restart_pane",     "Restart pane", show=False),
         Binding("d",         "toggle_perf",      "Perf",        show=False),
         Binding("tab",       "focus_next_pane",  "Next pane",   priority=True, show=False),
         Binding("shift+tab", "focus_prev_pane",  "Prev pane",   priority=True, show=False),
@@ -240,6 +241,24 @@ class TopiaryApp(App):
         """Manually force a config reload (same as saving the file)."""
         await self._reload_config()
 
+    async def action_restart_pane(self) -> None:
+        """Ctrl+R — kill and restart the focused pane's command."""
+        from .panes.command import CommandPane
+        from .panes.tabs import TabsPane
+
+        if self._focused_pane is None:
+            return
+        target: Widget = self._focused_pane
+        if isinstance(target, TabsPane):
+            target = self._get_active_tab_pane(target) or target
+        if not isinstance(target, CommandPane):
+            return
+
+        label = target.pane_cfg.title or target.pane_cfg.id
+        log.info("restart_pane  pane=%s", target.id)
+        await target.restart()
+        self.notify(f"↺  Restarting {label}", timeout=2)
+
     def action_toggle_perf(self) -> None:
         """Toggle the performance overlay."""
         overlay = self.query_one("#perf-overlay", PerfOverlay)
@@ -334,8 +353,8 @@ class TopiaryApp(App):
         if self._passthrough:
             # Only deactivate_pane escapes passthrough; everything else → on_key
             return action == "deactivate_pane"
-        # Hide the deactivate binding from the footer when there's nothing to exit
-        if action == "deactivate_pane":
+        # These actions require a focused pane; hide them otherwise
+        if action in ("deactivate_pane", "restart_pane"):
             return self._focused_pane is not None
         return True
 
