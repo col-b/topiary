@@ -108,6 +108,8 @@ class PerfOverlay(Static):
 class TopiaryApp(App):
     """Topiary — a configurable TUI dashboard."""
 
+    REFRESH_RATE = 10  # compositor at 10 Hz instead of default 60 Hz
+
     CSS = """
     Screen {
         layout: vertical;

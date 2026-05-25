@@ -118,6 +118,14 @@ class CommandPane(Widget):
 
     async def _run_loop(self) -> None:
         """Run once (refresh==0) or periodically (refresh>0)."""
+        # Wait for Textual to complete its first layout pass so content_size is
+        # known before we create the PTY.  Without this, panes start with the
+        # 24×80 fallback and then immediately receive SIGWINCH when the real
+        # layout fires — some apps (btop) crash if SIGWINCH arrives during init.
+        for _ in range(40):
+            if self.content_size.width > 0 and self.content_size.height > 0:
+                break
+            await asyncio.sleep(0.05)
         self._log.info("pane starting  cmd=%.80s", self.pane_cfg.command or "(none)")
         run_index = 0
         try:

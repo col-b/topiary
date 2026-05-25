@@ -16,16 +16,25 @@ from rich.text import Text
 
 from .log import log
 
-# pyte's basic-8 color names → Rich color names
+# pyte color names → Rich color names (basic 8 + bright 8)
 _NAMED = {
     "black": "black",
     "red": "red",
     "green": "green",
-    "brown": "yellow",   # ANSI "brown" = yellow
+    "brown": "yellow",          # ANSI "brown" = yellow
     "blue": "blue",
     "magenta": "magenta",
     "cyan": "cyan",
     "white": "white",
+    # pyte bright variants (e.g. "brightwhite") → Rich bright_ names
+    "brightblack":   "bright_black",
+    "brightred":     "bright_red",
+    "brightgreen":   "bright_green",
+    "brightbrown":   "bright_yellow",
+    "brightblue":    "bright_blue",
+    "brightmagenta": "bright_magenta",
+    "brightcyan":    "bright_cyan",
+    "brightwhite":   "bright_white",
 }
 
 # Sentinel for a fully-default style (no color, no attributes)
@@ -39,6 +48,9 @@ def _pyte_color(color: str | None, bold: bool = False) -> str | None:
     if len(color) == 6 and all(c in "0123456789abcdef" for c in color):
         return f"#{color}"
     name = _NAMED.get(color, color)
+    # Don't double-prefix: pyte bright colors already map to "bright_*" above
+    if name.startswith("bright_"):
+        return name
     return f"bright_{name}" if bold else name
 
 
