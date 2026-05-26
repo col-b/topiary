@@ -101,7 +101,22 @@ class CommandPane(Widget):
         if self._runner is not None:
             self._runner.kill_sync()
             self._runner = None
-        self._dirty = False
+        
+        # Cancel any existing worker with the same name
+        worker_name = f"cmd-{self.pane_cfg.id}"
+        for worker in self.workers:
+            if worker.name == worker_name and not worker.is_finished:
+                self._log.info("cancelling existing worker: %s", worker.name)
+                worker.cancel()
+        
+        # Clear the display and show restart message
+        output_widget = self.query_one("#output", Static)
+        output_widget.update("")
+        await asyncio.sleep(0.05)  # Brief pause for clear to be visible
+        output_widget.update("↺ Restarting...")
+        
+        # Keep _dirty = True so the first output will render
+        self._dirty = True
         # Reset perf counters so stats reflect the new process, not the old one
         self._pty_updates = 0
         self._render_count = 0
@@ -109,8 +124,16 @@ class CommandPane(Widget):
         self._render_ms_max = 0.0
         self._render_ms_last = 0.0
         self._last_log_ts = 0.0
-        # exclusive=True cancels any still-running worker with the same group
-        self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
+        
+        # Wait for old worker/process to fully exit
+        await asyncio.sleep(0.3)
+        
+        # Clear restart message before starting
+        output_widget.update("")
+        
+        # Start fresh worker
+        self.run_worker(self._run_loop(), exclusive=True, name=worker_name)
+        self._log.info("restart worker launched")
 
     # ------------------------------------------------------------------ #
     # Run loop                                                             #

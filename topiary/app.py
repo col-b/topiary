@@ -104,6 +104,51 @@ class PerfOverlay(Static):
         self.update(table)
 
 
+class HelpOverlay(Static):
+    """Help overlay showing key bindings and attribution. Toggle with 'h'."""
+
+    DEFAULT_CSS = """
+    HelpOverlay {
+        dock: top;
+        width: 70;
+        height: auto;
+        background: $surface;
+        border: round $primary;
+        padding: 1 3;
+        layer: overlay;
+        display: none;
+    }
+    """
+
+    def on_mount(self) -> None:
+        from rich.text import Text
+        help_text = Text(justify="center")
+        help_text.append("╭─ TOPIARY ─╮\n", style="bold cyan")
+        help_text.append("Created mostly by Copilot with some clb-help\n\n", style="dim")
+        help_text.append("Key Bindings:\n", style="bold yellow")
+        help_text.append("  h           ", style="cyan")
+        help_text.append("Toggle this help\n")
+        help_text.append("  Ctrl+R      ", style="cyan")
+        help_text.append("Restart pane / Reload config / Passthrough\n")
+        help_text.append("  Ctrl+Q      ", style="cyan")
+        help_text.append("Quit topiary\n")
+        help_text.append("  Ctrl+C      ", style="cyan")
+        help_text.append("Quit topiary\n")
+        help_text.append("  Ctrl+D      ", style="cyan")
+        help_text.append("Toggle performance overlay\n")
+        help_text.append("  Tab         ", style="cyan")
+        help_text.append("Focus next pane\n")
+        help_text.append("  Shift+Tab   ", style="cyan")
+        help_text.append("Focus previous pane\n")
+        help_text.append("  Enter       ", style="cyan")
+        help_text.append("Enter passthrough mode (interact with pane)\n")
+        help_text.append("  Escape      ", style="cyan")
+        help_text.append("Exit passthrough mode\n\n")
+        help_text.append("Press h to close", style="dim italic")
+        self.update(help_text)
+        log.info("HelpOverlay mounted")
+
+
 
 class TopiaryApp(App):
     """Topiary — a configurable TUI dashboard."""
@@ -132,15 +177,15 @@ class TopiaryApp(App):
     """
 
     BINDINGS = [
-        Binding("q",         "quit",             "Quit",        priority=True),
-        Binding("ctrl+c",    "quit",             "Quit",        show=False, priority=True),
-        Binding("r",         "action_reload",    "Reload"),
-        Binding("ctrl+r",    "restart_pane",     "Restart pane", show=False),
-        Binding("d",         "toggle_perf",      "Perf",        show=False),
-        Binding("tab",       "focus_next_pane",  "Next pane",   priority=True, show=False),
-        Binding("shift+tab", "focus_prev_pane",  "Prev pane",   priority=True, show=False),
-        Binding("enter",     "activate_pane",    "Interact",    show=False),
-        Binding("escape",    "deactivate_pane",  "Exit",        priority=True, show=False),
+        Binding("h",         "toggle_help",      "Help",        priority=True),
+        Binding("ctrl+q",    "quit",             "Quit",        priority=True),
+        Binding("ctrl+c",    "quit",             "Quit",        priority=True),
+        Binding("ctrl+r",    "restart_pane",     "Restart pane", priority=True),
+        Binding("ctrl+d",    "toggle_perf",      "Perf",        priority=True),
+        Binding("tab",       "focus_next_pane",  "Next pane",   priority=True),
+        Binding("shift+tab", "focus_prev_pane",  "Prev pane",   priority=True),
+        Binding("enter",     "activate_pane",    "Interact",    priority=True),
+        Binding("escape",    "deactivate_pane",  "Exit",        priority=True),
     ]
 
     def __init__(self, config: AppConfig, config_path: Path) -> None:
@@ -172,6 +217,7 @@ class TopiaryApp(App):
 
     def compose(self) -> ComposeResult:
         yield PerfOverlay(id="perf-overlay")
+        yield HelpOverlay(id="help-overlay")
         for i, row_cfg in enumerate(self.config_data.rows):
             panes: list[Widget] = []
             for pane_cfg in row_cfg.panes:
@@ -244,7 +290,13 @@ class TopiaryApp(App):
         await self._reload_config()
 
     async def action_restart_pane(self) -> None:
-        """Ctrl+R — in passthrough: forward \\x12 to PTY; when focused: restart command."""
+        """Ctrl+R — three modes:
+        1. Passthrough: forward \\x12 to PTY
+        2. Pane focused: restart that pane
+        3. No pane focused: reload config
+        """
+        log.info("restart_pane action called  passthrough=%s  focused=%s", 
+                 self._passthrough, self._focused_pane)
         from .panes.command import CommandPane
         from .panes.tabs import TabsPane
 
@@ -260,11 +312,15 @@ class TopiaryApp(App):
             return
 
         if self._focused_pane is None:
+            # No pane focused → reload config
+            log.info("no pane focused, reloading config")
+            await self._reload_config()
             return
         target: Widget = self._focused_pane
         if isinstance(target, TabsPane):
             target = self._get_active_tab_pane(target) or target
         if not isinstance(target, CommandPane):
+            log.warning("focused pane is not CommandPane: %s", type(target))
             return
 
         label = target.pane_cfg.title or target.pane_cfg.id
@@ -278,6 +334,13 @@ class TopiaryApp(App):
         overlay.display = not overlay.display
         if overlay.display:
             overlay._refresh_stats()
+
+    def action_toggle_help(self) -> None:
+        """Toggle the help overlay."""
+        log.info("toggle_help action called")
+        overlay = self.query_one("#help-overlay", HelpOverlay)
+        overlay.display = not overlay.display
+        log.info("help overlay display=%s", overlay.display)
 
     # -- Pane focus --------------------------------------------------------
 
@@ -366,9 +429,10 @@ class TopiaryApp(App):
         if self._passthrough:
             # deactivate_pane exits passthrough; restart_pane forwards \x12 to PTY
             return action in ("deactivate_pane", "restart_pane")
-        # These actions require a focused pane; hide them otherwise
-        if action in ("deactivate_pane", "restart_pane"):
+        # deactivate_pane requires a focused pane
+        if action == "deactivate_pane":
             return self._focused_pane is not None
+        # restart_pane works both with and without focus (reload vs restart)
         return True
 
     def on_key(self, event: events.Key) -> None:
