@@ -1,5 +1,7 @@
 # topiary devdash.toml — developer-focused dashboard
-# Runs: system stats, ticker, git branch tree, PR review, reminders
+# Requires: git_branch_tree (https://github.com/col-b/env)
+#           remind          (https://github.com/col-b/env)
+#           ticker          (https://github.com/achannarasappa/ticker)
 
 [app]
 title = "topiary · devdash"
