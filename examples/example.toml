@@ -1,0 +1,82 @@
+# topiary example.toml — feature showcase using only standard Unix tools
+#
+# Demonstrates: multi-row layout, tabbed panes, scrollable panes,
+#               auto-refresh, restart_on_resize, and figlet headers.
+#
+# Run with:  topiary examples/example.toml
+# Requires:  figlet  (sudo apt install figlet  /  brew install figlet)
+
+[app]
+title = "topiary · example"
+
+# ── Row 1: clock + hostname + uptime ────────────────────────────────────
+[[rows]]
+height = "9"
+
+  [[rows.panes]]
+  id                = "clock"
+  type              = "command"
+  title             = "Clock"
+  width             = "40%"
+  command           = "while true; do printf '\\033[2J\\033[H'; date '+%H : %M : %S' | figlet -w $(tput cols) | head -n $(($(tput lines) - 1)); sleep 1; done"
+
+  [[rows.panes]]
+  id                = "identity"
+  type              = "command"
+  title             = "Host"
+  width             = "30%"
+  restart_on_resize = true
+  command           = "echo \"$(whoami)@$(hostname -s)\" | figlet -c -w $(tput cols) | head -n $(tput lines)"
+
+  [[rows.panes]]
+  id      = "uptime"
+  type    = "command"
+  title   = "Uptime / Load"
+  width   = "1fr"
+  refresh = 5
+  command = "uptime && echo && printf 'Load: ' && cat /proc/loadavg"
+
+# ── Row 2: system info tabs + process viewer tabs ────────────────────────
+[[rows]]
+height = "1fr"
+
+  # Left: tabbed system info
+  [[rows.panes]]
+  id    = "system"
+  type  = "tabs"
+  title = "System"
+  width = "1fr"
+
+    [[rows.panes.tabs]]
+    title   = "OS"
+    command = "uname -srm && echo && (grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\"' || uname -v) && echo && printf 'CPUs: ' && nproc && echo && free -h"
+
+    [[rows.panes.tabs]]
+    title      = "Disk"
+    command    = "df -h | column -t"
+    scrollable = true
+    refresh    = 30
+
+    [[rows.panes.tabs]]
+    title   = "Who"
+    command = "w"
+    refresh = 10
+
+  # Right: tabbed process viewer
+  [[rows.panes]]
+  id    = "processes"
+  type  = "tabs"
+  title = "Processes"
+  width = "1.5fr"
+
+    [[rows.panes.tabs]]
+    title      = "CPU"
+    command    = "ps aux --sort=-%cpu | head -20"
+    scrollable = true
+    refresh    = 3
+
+    [[rows.panes.tabs]]
+    title      = "Memory"
+    command    = "ps aux --sort=-%mem | head -20"
+    scrollable = true
+    refresh    = 3
