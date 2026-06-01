@@ -5,6 +5,19 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from textual.color import Color
+
+
+def _validate_color(value: str, field_name: str) -> str:
+    """Raise ValueError with a clear message if value is not a parseable Textual color."""
+    try:
+        Color.parse(value)
+    except Exception as exc:
+        raise ValueError(
+            f"[app] {field_name} = {value!r} is not a valid color: {exc}"
+        ) from exc
+    return value
+
 
 @dataclass
 class PaneConfig:
@@ -43,6 +56,7 @@ class AppConfig:
     title: str = "topiary"
     refresh_rate_hz: float = 20.0
     background: str = "transparent"
+    foreground: str = ""
     rows: list[RowConfig] = field(default_factory=list)
 
 
@@ -60,6 +74,9 @@ def load_config(path: Path) -> AppConfig:
         data = tomllib.load(f)
 
     app_kw = {k: v for k, v in data.get("app", {}).items()}
+    for color_field in ("background", "foreground"):
+        if color_field in app_kw and app_kw[color_field]:
+            _validate_color(app_kw[color_field], color_field)
     rows = []
     for row_raw in data.get("rows", []):
         row_raw = dict(row_raw)

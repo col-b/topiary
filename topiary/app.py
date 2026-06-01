@@ -209,6 +209,8 @@ class TopiaryApp(App):
     def on_mount(self) -> None:
         self.title = self.config_data.title
         self.screen.styles.background = self.config_data.background
+        if self.config_data.foreground:
+            self.screen.styles.color = self.config_data.foreground
         pane_count = sum(len(r.panes) for r in self.config_data.rows)
         log.info("app mounted  panes=%d  refresh_rate=%.1fhz  title=%r",
                  pane_count, self.config_data.refresh_rate_hz, self.config_data.title)
@@ -307,6 +309,8 @@ class TopiaryApp(App):
 
         self.title = self.config_data.title
         self.screen.styles.background = self.config_data.background
+        if self.config_data.foreground:
+            self.screen.styles.color = self.config_data.foreground
         self.notify("Config reloaded ↺", timeout=2)
 
     # ------------------------------------------------------------------ #
