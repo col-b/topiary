@@ -64,7 +64,7 @@ class PerfOverlay(Static):
     DEFAULT_CSS = """
     PerfOverlay {
         dock: right;
-        width: 62;
+        width: 88;
         height: auto;
         background: $surface;
         border: round $warning;
