@@ -4,25 +4,33 @@
 [app]
 title = "topiary · devdash"
 
-# ── Row 1: system stats + market ticker ────────────────────────────────
+# ── Row 1: clock + hostname + uptime ───────────────────────────────────
 [[rows]]
-height = "35%"
+height = "9"
 
   [[rows.panes]]
-  id     = "system"
-  type   = "system"
-  title  = "System"
-  width  = "35%"
+  id                = "clock"
+  type              = "command"
+  title             = "Clock"
+  width             = "40%"
+  command           = "while true; do printf '\\033[2J\\033[H'; date '+%H : %M : %S' | figlet -w $(tput cols) | head -n $(($(tput lines) - 1)); sleep 1; done"
+
+  [[rows.panes]]
+  id                = "identity"
+  type              = "command"
+  title             = "Host"
+  width             = "25%"
+  restart_on_resize = true
+  command           = "echo \"$(whoami)@$(hostname -s)\" | figlet -c -w $(tput cols) | head -n $(tput lines)"
 
   [[rows.panes]]
   id      = "ticker"
   type    = "command"
   title   = "Market"
-  command = "ticker -w AUR"      # runs in watch mode; topiary restarts if it exits
+  command = "ticker -w AUR"
   width   = "1fr"
-  # refresh not set → restart after 2s if ticker exits unexpectedly
 
-# ── Row 2: git / PRs / reminders (tabbed) + optional log tail ──────────
+# ── Row 2: git / PRs / reminders (tabbed) + btop ───────────────────────
 [[rows]]
 height = "1fr"
 
@@ -31,8 +39,25 @@ height = "1fr"
   type  = "tabs"
   title = "Dev"
   width = "1fr"
-  tabs = [
-    { title = "Git",     command = "git_branch_tree -w",    refresh = 0 },
-    { title = "PRs",     command = "git_branch_tree -p -w", refresh = 0 },
-    { title = "Remind",  command = "remind -w",              refresh = 0 },
-  ]
+
+    [[rows.panes.tabs]]
+    title      = "Git"
+    command    = "git_branch_tree -uw"
+    scrollable = true
+
+    [[rows.panes.tabs]]
+    title      = "PRs"
+    command    = "git_branch_tree -p -w"
+    scrollable = true
+
+    [[rows.panes.tabs]]
+    title   = "Remind"
+    command = "remind -w 30"
+
+  [[rows.panes]]
+  id          = "btop"
+  type        = "command"
+  title       = "btop"
+  width       = "1.5fr"
+  command     = "btop"
+  interactive = true

@@ -8,6 +8,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.events import Click
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -60,6 +61,8 @@ class CommandPane(Widget):
         self._refresh_rate_hz = max(1.0, refresh_rate_hz)
         self._runner: TerminalRunner | None = None
         self._dirty: bool = False
+        self._run_lock = asyncio.Lock()
+        self._run_index: int = 0
         # perf counters
         self._pty_updates: int = 0
         self._render_count: int = 0
@@ -69,6 +72,7 @@ class CommandPane(Widget):
         self._render_ts: deque[float] = deque(maxlen=60)  # timestamps of recent renders
         self._log = log.getChild(f"pane.{pane_cfg.id}")
         self._last_log_ts: float = 0.0   # monotonic time of last periodic perf log
+        self._hover_refresh: bool = False  # true when mouse is over top border row
 
     def compose(self) -> ComposeResult:
         if self.pane_cfg.scrollable:
@@ -80,7 +84,7 @@ class CommandPane(Widget):
     def on_mount(self) -> None:
         self.styles.width = self.pane_cfg.width
         if self._show_border:
-            self.border_title = self.pane_cfg.title or self.pane_cfg.id
+            self._set_border_title()
         else:
             self.styles.border = ("none", "transparent")
         if self.pane_cfg.min_width:
@@ -88,6 +92,35 @@ class CommandPane(Widget):
             self._min_width = self.pane_cfg.min_width
         self.set_interval(1 / self._refresh_rate_hz, self._maybe_refresh)
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
+
+    def _set_border_title(self, hover: bool = False) -> None:
+        if not self._show_border:
+            return
+        title = self.pane_cfg.title or self.pane_cfg.id
+        if self.pane_cfg.refresh > 0:
+            icon = "[bold yellow]⟳[/bold yellow]" if hover else "⟳"
+            self.border_title = f"{icon} {title}"
+        else:
+            self.border_title = title
+
+    def on_mouse_move(self, event: object) -> None:
+        if self.pane_cfg.refresh <= 0:
+            return
+        x, y = getattr(event, "x", -1), getattr(event, "y", -1)
+        on_icon = y == 0 and x <= 3
+        if on_icon != self._hover_refresh:
+            self._hover_refresh = on_icon
+            self._set_border_title(hover=on_icon)
+
+    def on_enter(self, event: object) -> None:
+        if self.pane_cfg.is_interactive:
+            self.add_class("pane-hover")
+
+    def on_leave(self, event: object) -> None:
+        self.remove_class("pane-hover")
+        if self._hover_refresh:
+            self._hover_refresh = False
+            self._set_border_title(hover=False)
 
     def on_unmount(self) -> None:
         """Synchronously kill child process on widget removal or app exit."""
@@ -135,6 +168,32 @@ class CommandPane(Widget):
         self.run_worker(self._run_loop(), exclusive=True, name=worker_name)
         self._log.info("restart worker launched")
 
+    def on_button_pressed(self, event: object) -> None:
+        pass  # no longer used — kept so subclasses aren't broken
+
+    def on_click(self, event: Click) -> None:
+        """Clicking the ⟳ triggers a refresh; other clicks cycle focus state."""
+        if self.pane_cfg.refresh > 0 and event.y == 0 and event.x <= 3:
+            event.stop()
+            self.run_worker(self._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
+            return
+
+        # Only cycle focus for interactive panes.
+        if not self.pane_cfg.is_interactive:
+            return
+
+        event.stop()
+        # Cycle: unfocused → focused → selected → unfocused (+hover since mouse is still over)
+        app = self.app
+        if self.has_class("pane-active"):
+            app._set_focused_pane(None)
+            self.add_class("pane-hover")
+        elif self.has_class("pane-focused"):
+            self.remove_class("pane-focused")
+            self.add_class("pane-active")
+        else:
+            app._set_focused_pane(self)
+
     # ------------------------------------------------------------------ #
     # Run loop                                                             #
     # ------------------------------------------------------------------ #
@@ -150,56 +209,57 @@ class CommandPane(Widget):
                 break
             await asyncio.sleep(0.05)
         self._log.info("pane starting  cmd=%.80s", self.pane_cfg.command or "(none)")
-        run_index = 0
         try:
-            await self._run_once(run_index)
+            await self._run_once()
             while self.pane_cfg.refresh > 0:
-                run_index += 1
                 await asyncio.sleep(self.pane_cfg.refresh)
-                await self._run_once(run_index)
+                await self._run_once()
         except Exception:
             self._log.exception("unhandled error in _run_loop")
         finally:
             if self._runner is not None:
-                await self._runner.stop()
+                self._runner.kill_sync()
                 self._runner = None
 
-    async def _run_once(self, run_index: int = 0) -> None:
-        if self.pane_cfg.scrollable:
-            rows, cols = _SCROLLABLE_ROWS, max(10, self.content_size.width or 80)
-        else:
-            rows = max(4, self.content_size.height or 24)
-            cols = max(10, self.content_size.width or 80)
-        runner = TerminalRunner(
-            self.pane_cfg.command or "echo 'no command configured'",
-            rows,
-            cols,
-        )
-        self._runner = runner
-        t_start = time.monotonic()
-        try:
-            await runner.start(on_update=self._mark_dirty, cwd=self.pane_cfg.cwd)
-            await runner.wait()
-            elapsed = time.monotonic() - t_start
-            self._log.info(
-                "run #%d finished  exit=%s  elapsed=%.1fs  pty_bytes=%d",
-                run_index,
-                runner.exit_code,
-                elapsed,
-                runner.bytes_received,
+    async def _run_once(self) -> None:
+        async with self._run_lock:
+            self._run_index += 1
+            run_index = self._run_index
+            if self.pane_cfg.scrollable:
+                rows, cols = _SCROLLABLE_ROWS, max(10, self.content_size.width or 80)
+            else:
+                rows = max(4, self.content_size.height or 24)
+                cols = max(10, self.content_size.width or 80)
+            runner = TerminalRunner(
+                self.pane_cfg.command or "echo 'no command configured'",
+                rows,
+                cols,
             )
-        except Exception:
-            self._log.exception("error in _run_once #%d", run_index)
-        finally:
-            if self._dirty:
-                try:
-                    text = runner.render(trim_trailing=self.pane_cfg.scrollable)
-                    self.query_one("#output", Static).update(text)
-                    self._dirty = False
-                except Exception:
-                    pass
-            self._runner = None
-            await runner.stop()
+            self._runner = runner
+            t_start = time.monotonic()
+            try:
+                await runner.start(on_update=self._mark_dirty, cwd=self.pane_cfg.cwd)
+                await runner.wait()
+                elapsed = time.monotonic() - t_start
+                self._log.info(
+                    "run #%d finished  exit=%s  elapsed=%.1fs  pty_bytes=%d",
+                    run_index,
+                    runner.exit_code,
+                    elapsed,
+                    runner.bytes_received,
+                )
+            except Exception:
+                self._log.exception("error in _run_once #%d", run_index)
+            finally:
+                if self._dirty:
+                    try:
+                        text = runner.render(trim_trailing=self.pane_cfg.scrollable)
+                        self.query_one("#output", Static).update(text)
+                        self._dirty = False
+                    except Exception:
+                        pass
+                self._runner = None
+                runner.kill_sync()
 
     # ------------------------------------------------------------------ #
     # Display + resize                                                     #
@@ -279,6 +339,9 @@ class CommandPane(Widget):
             )
 
     def on_resize(self) -> None:
+        if self.pane_cfg.restart_on_resize:
+            self.run_worker(self.restart(), name=f"resize-restart-{self.pane_cfg.id}")
+            return
         if self._runner:
             cols = max(10, self.content_size.width) or 80
             if self.pane_cfg.scrollable:

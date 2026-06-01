@@ -17,10 +17,19 @@ class PaneConfig:
     refresh: int = 0         # 0 = run once (watcher); >0 = restart N seconds after exit
     min_width: int = 0       # collapse pane when terminal narrower than this
     cwd: str | None = None   # working directory for the command
-    scrollable: bool = False  # wrap output in a scrollable container
-    follow: bool = False      # auto-scroll to bottom on new output (only if already at bottom)
+    scrollable: bool = False         # wrap output in a scrollable container
+    follow: bool = False             # auto-scroll to bottom on new output (only if already at bottom)
+    interactive: bool = False        # allow hover/focus/click-select and Tab cycling
+    restart_on_resize: bool = False  # restart the command when the terminal is resized
     tabs: list["PaneConfig"] = field(default_factory=list)
     panes: list["PaneConfig"] = field(default_factory=list)  # sub-panes for column/row types
+
+    @property
+    def is_interactive(self) -> bool:
+        """True if this pane (or any child) is interactive or scrollable."""
+        if self.interactive or self.scrollable:
+            return True
+        return any(t.is_interactive for t in self.tabs) or any(p.is_interactive for p in self.panes)
 
 
 @dataclass

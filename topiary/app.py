@@ -164,6 +164,9 @@ class TopiaryApp(App):
         layout: horizontal;
         width: 100%;
     }
+    .pane-hover {
+        border: round white;
+    }
     .pane-focused {
         border: round $accent;
         border-title-color: $accent;
@@ -236,13 +239,38 @@ class TopiaryApp(App):
     # ------------------------------------------------------------------ #
 
     async def _watch_config(self) -> None:
-        """Poll config file mtime; reload automatically when it changes."""
+        """Watch config file via inotify; reload automatically when it changes."""
+        import threading
+        loop = asyncio.get_event_loop()
+        changed = asyncio.Event()
+
+        def _inotify_thread() -> None:
+            try:
+                import inotify_simple
+                real = self.config_path.resolve()
+                flags = inotify_simple.flags.CLOSE_WRITE | inotify_simple.flags.MOVED_TO
+                inotify = inotify_simple.INotify()
+                inotify.add_watch(str(real.parent), flags)
+                while True:
+                    for event in inotify.read(timeout=30000):
+                        if getattr(event, "name", None) == real.name:
+                            loop.call_soon_threadsafe(changed.set)
+            except Exception:
+                pass  # fall back to polling
+
+        threading.Thread(target=_inotify_thread, daemon=True).start()
+
         try:
             last_mtime = self.config_path.stat().st_mtime
         except OSError:
-            return
+            last_mtime = 0.0
+
         while True:
-            await asyncio.sleep(1)
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                pass
+            changed.clear()
             try:
                 mtime = self.config_path.stat().st_mtime
             except OSError:
