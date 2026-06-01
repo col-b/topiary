@@ -34,6 +34,7 @@ class PaneConfig:
     follow: bool = False             # auto-scroll to bottom on new output (only if already at bottom)
     interactive: bool = False        # allow hover/focus/click-select and Tab cycling
     restart_on_resize: bool = False  # restart the command when the terminal is resized
+    max_render_hz: float | None = None  # cap per-pane render rate (None = use global refresh_rate_hz)
     tabs: list["PaneConfig"] = field(default_factory=list)
     panes: list["PaneConfig"] = field(default_factory=list)  # sub-panes for column/row types
 

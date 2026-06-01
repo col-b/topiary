@@ -83,22 +83,30 @@ class PerfOverlay(Static):
         table = RichTable(title="Pane Perf (press d to close)", expand=True, show_lines=False)
         table.add_column("Pane", style="cyan", max_width=16)
         table.add_column("Rndr/s", justify="right")
+        table.add_column("Skip/s", justify="right")
         table.add_column("s2r ms", justify="right")
         table.add_column("upd ms", justify="right")
         table.add_column("tot ms", justify="right")
         table.add_column("max ms", justify="right")
+        table.add_column("B/s", justify="right")
         table.add_column("Vis", justify="center")
         rows = sorted(PANE_PERF.items(), key=lambda x: -x[1].get("render_ms_last", 0))
         for _pid, s in rows:
             last = s["render_ms_last"]
             color = "red" if last > 30 else ("yellow" if last > 10 else "green")
+            bps = s.get("bytes_per_sec", 0)
+            bps_str = f"{bps/1024:.1f}k" if bps >= 1024 else f"{bps:.0f}"
+            skip_hz = s.get("skip_hz", 0)
+            skip_color = "yellow" if skip_hz > 15 else "default"
             table.add_row(
                 s["title"],
                 f"{s['render_hz']:.1f}",
+                f"[{skip_color}]{skip_hz:.1f}[/{skip_color}]",
                 f"[{color}]{s.get('s2r_ms', 0):.1f}[/{color}]",
                 f"{s.get('update_ms', 0):.1f}",
                 f"[{color}]{last:.1f}[/{color}]",
                 f"{s['render_ms_max']:.1f}",
+                bps_str,
                 "✓" if s["visible"] else "·",
             )
         self.update(table)

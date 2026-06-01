@@ -70,6 +70,13 @@ class CommandPane(Widget):
         self._render_ms_max: float = 0.0
         self._render_ms_last: float = 0.0
         self._render_ts: deque[float] = deque(maxlen=60)  # timestamps of recent renders
+        self._skip_count: int = 0           # _maybe_refresh no-ops (not dirty)
+        self._throttle_count: int = 0       # _maybe_refresh no-ops (rate-capped)
+        self._last_render_ts: float = 0.0   # monotonic time of last actual render
+        self._skip_ts: deque[float] = deque(maxlen=200)  # timestamps of recent skips
+        self._bytes_sample_ts: float = 0.0  # monotonic time of last bytes/s sample
+        self._bytes_sample_start: int = 0   # bytes_received at last sample
+        self._bytes_per_sec: float = 0.0    # rolling bytes/s estimate
         self._log = log.getChild(f"pane.{pane_cfg.id}")
         self._last_log_ts: float = 0.0   # monotonic time of last periodic perf log
         self._hover_refresh: bool = False  # true when mouse is over top border row
@@ -157,6 +164,13 @@ class CommandPane(Widget):
         self._render_ms_max = 0.0
         self._render_ms_last = 0.0
         self._last_log_ts = 0.0
+        self._skip_count = 0
+        self._throttle_count = 0
+        self._last_render_ts = 0.0
+        self._skip_ts.clear()
+        self._bytes_sample_ts = 0.0
+        self._bytes_sample_start = 0
+        self._bytes_per_sec = 0.0
         
         # Wait for old worker/process to fully exit
         await asyncio.sleep(0.3)
@@ -273,8 +287,21 @@ class CommandPane(Widget):
     def _maybe_refresh(self) -> None:
         """Timer callback: render only if new PTY data has arrived since last frame."""
         if not self._dirty or self._runner is None:
+            self._skip_count += 1
+            self._skip_ts.append(time.monotonic())
             return
+
+        # Per-pane render rate cap: if max_render_hz is set, skip renders that arrive
+        # faster than that rate (dirty flag stays True so the next tick catches it).
+        max_hz = self.pane_cfg.max_render_hz
+        if max_hz is not None and max_hz > 0:
+            now = time.monotonic()
+            if now - self._last_render_ts < 1.0 / max_hz:
+                self._throttle_count += 1
+                return
+
         self._dirty = False
+        self._last_render_ts = time.monotonic()
         t0 = time.perf_counter()
         try:
             rich_text = self._runner.render(trim_trailing=self.pane_cfg.scrollable)
@@ -309,7 +336,23 @@ class CommandPane(Widget):
         cutoff = now - 10.0
         recent = sum(1 for t in self._render_ts if t >= cutoff)
         render_hz = recent / 10.0
+        skip_recent = sum(1 for t in self._skip_ts if t >= cutoff)
+        skip_hz = skip_recent / 10.0
         update_ms = elapsed_ms - render_ms
+
+        # Update bytes/sec estimate every 2s
+        if self._runner:
+            current_bytes = self._runner.bytes_received
+            if self._bytes_sample_ts == 0.0:
+                self._bytes_sample_ts = now
+                self._bytes_sample_start = current_bytes
+            elif now - self._bytes_sample_ts >= 2.0:
+                delta = current_bytes - self._bytes_sample_start
+                elapsed = now - self._bytes_sample_ts
+                self._bytes_per_sec = delta / elapsed if elapsed > 0 else 0.0
+                self._bytes_sample_ts = now
+                self._bytes_sample_start = current_bytes
+
         PANE_PERF[self.pane_cfg.id] = {
             "title": self.pane_cfg.title or self.pane_cfg.id,
             "pty_updates": self._pty_updates,
@@ -320,6 +363,9 @@ class CommandPane(Widget):
             "s2r_ms": render_ms,
             "update_ms": update_ms,
             "render_hz": render_hz,
+            "skip_hz": skip_hz,
+            "throttle_count": self._throttle_count,
+            "bytes_per_sec": self._bytes_per_sec,
             "visible": self.visible,
         }
         # Periodic perf summary to log (every 30s)
@@ -327,15 +373,19 @@ class CommandPane(Widget):
             self._last_log_ts = now
             pty_bytes = self._runner.bytes_received if self._runner else 0
             self._log.info(
-                "perf  render=%.1f/s  s2r=%.1fms  upd=%.1fms  tot=%.1fms  "
-                "max=%.1fms  pty_updates=%d  pty_bytes=%d",
+                "perf  render=%.1f/s  skip=%.1f/s  throttle=%d  "
+                "s2r=%.1fms  upd=%.1fms  tot=%.1fms  max=%.1fms  "
+                "pty_updates=%d  pty_bytes=%d  bytes/s=%.0f",
                 render_hz,
+                skip_hz,
+                self._throttle_count,
                 render_ms,
                 update_ms,
                 elapsed_ms,
                 self._render_ms_max,
                 self._pty_updates,
                 pty_bytes,
+                self._bytes_per_sec,
             )
 
     def on_resize(self) -> None:
