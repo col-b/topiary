@@ -76,6 +76,17 @@ class PerfOverlay(Static):
 
     def on_mount(self) -> None:
         self.set_interval(1.0, self._refresh_stats)
+        self.set_interval(2.0, self._dump_perf_json)
+
+    def _dump_perf_json(self) -> None:
+        """Write PANE_PERF snapshot to /tmp/topiary_perf.json for external inspection."""
+        import json, time
+        try:
+            payload = {"ts": time.time(), "panes": dict(PANE_PERF)}
+            with open("/tmp/topiary_perf.json", "w") as f:
+                json.dump(payload, f, indent=2)
+        except Exception:
+            pass
 
     def _refresh_stats(self) -> None:
         if not self.display:
