@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from textual.app import ComposeResult
@@ -213,7 +215,14 @@ class CommandPane(Widget):
     # ------------------------------------------------------------------ #
 
     async def _run_loop(self) -> None:
-        """Run once (refresh==0) or periodically (refresh>0)."""
+        """Run the command, then re-run on inotify events and/or a refresh timer.
+
+        Modes (combinable):
+          watch only    — re-run whenever a watched path changes
+          refresh only  — re-run every N seconds
+          watch+refresh — re-run on watch event OR after N seconds, whichever first
+          neither       — run once
+        """
         # Wait for Textual to complete its first layout pass so content_size is
         # known before we create the PTY.  Without this, panes start with the
         # 24×80 fallback and then immediately receive SIGWINCH when the real
@@ -225,8 +234,27 @@ class CommandPane(Widget):
         self._log.info("pane starting  cmd=%.80s", self.pane_cfg.command or "(none)")
         try:
             await self._run_once()
-            while self.pane_cfg.refresh > 0:
-                await asyncio.sleep(self.pane_cfg.refresh)
+            has_refresh = self.pane_cfg.refresh > 0
+            has_watch   = bool(self.pane_cfg.watch)
+            if not has_refresh and not has_watch:
+                return  # run-once mode
+
+            trigger = asyncio.Event()
+            if has_watch:
+                self._start_inotify_watcher(trigger)
+
+            while True:
+                if has_refresh and has_watch:
+                    try:
+                        await asyncio.wait_for(trigger.wait(), timeout=self.pane_cfg.refresh)
+                    except asyncio.TimeoutError:
+                        pass
+                    trigger.clear()
+                elif has_refresh:
+                    await asyncio.sleep(self.pane_cfg.refresh)
+                else:  # watch only
+                    await trigger.wait()
+                    trigger.clear()
                 await self._run_once()
         except Exception:
             self._log.exception("unhandled error in _run_loop")
@@ -234,6 +262,44 @@ class CommandPane(Widget):
             if self._runner is not None:
                 self._runner.kill_sync()
                 self._runner = None
+
+    def _start_inotify_watcher(self, trigger: asyncio.Event) -> None:
+        """Spawn a daemon thread that fires *trigger* whenever any watched path changes."""
+        loop = asyncio.get_event_loop()
+        paths = [Path(p).expanduser().resolve() for p in self.pane_cfg.watch]
+
+        def _thread() -> None:
+            try:
+                import inotify_simple  # type: ignore
+                flags = (
+                    inotify_simple.flags.CLOSE_WRITE
+                    | inotify_simple.flags.MOVED_TO
+                    | inotify_simple.flags.MODIFY
+                )
+                inotify = inotify_simple.INotify()
+                # Map watch-descriptor → expected filename (None = watch whole dir)
+                wd_map: dict[int, str | None] = {}
+                for p in paths:
+                    if not p.parent.exists():
+                        continue
+                    watch_dir = p.parent if p.is_file() or not p.is_dir() else p
+                    expected  = p.name if not p.is_dir() else None
+                    wd = inotify.add_watch(str(watch_dir), flags)
+                    wd_map[wd] = expected
+                if not wd_map:
+                    return
+                while True:
+                    events = inotify.read(timeout=30_000)
+                    for event in events:
+                        expected = wd_map.get(event.wd)
+                        name     = getattr(event, "name", None) or ""
+                        if expected is None or name == expected:
+                            loop.call_soon_threadsafe(trigger.set)
+                            break  # debounce: one trigger per read batch
+            except Exception:
+                self._log.warning("inotify watcher failed; falling back to refresh-only")
+
+        threading.Thread(target=_thread, daemon=True, name=f"inotify-{self.pane_cfg.id}").start()
 
     async def _run_once(self) -> None:
         async with self._run_lock:
