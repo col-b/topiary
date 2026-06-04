@@ -5,6 +5,7 @@ import asyncio
 import threading
 import time
 from collections import deque
+from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,8 @@ class CommandPane(Widget):
         self._log = log.getChild(f"pane.{pane_cfg.id}")
         self._last_log_ts: float = 0.0   # monotonic time of last periodic perf log
         self._hover_refresh: bool = False  # true when mouse is over top border row
+        self._schedule_time: dtime | None = self._parse_schedule(pane_cfg.schedule)
+        self._last_scheduled_date: date | None = None  # date on which schedule last fired
 
     def compose(self) -> ComposeResult:
         if self.pane_cfg.scrollable:
@@ -106,14 +109,14 @@ class CommandPane(Widget):
         if not self._show_border:
             return
         title = self.pane_cfg.title or self.pane_cfg.id
-        if self.pane_cfg.refresh > 0:
+        if self.pane_cfg.refresh > 0 or self.pane_cfg.schedule:
             icon = "[bold yellow]⟳[/bold yellow]" if hover else "⟳"
             self.border_title = f"{icon} {title}"
         else:
             self.border_title = title
 
     def on_mouse_move(self, event: object) -> None:
-        if self.pane_cfg.refresh <= 0:
+        if self.pane_cfg.refresh <= 0 and not self.pane_cfg.schedule:
             return
         x, y = getattr(event, "x", -1), getattr(event, "y", -1)
         on_icon = y == 0 and x <= 3
@@ -214,6 +217,31 @@ class CommandPane(Widget):
     # Run loop                                                             #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _parse_schedule(value: str | None) -> dtime | None:
+        """Parse "HH:MM" schedule string → time object, or None if unset/invalid."""
+        if not value:
+            return None
+        try:
+            h, m = value.strip().split(":")
+            return dtime(int(h), int(m))
+        except (ValueError, TypeError):
+            log.warning("invalid schedule %r — expected HH:MM", value)
+            return None
+
+    def _schedule_due(self) -> bool:
+        """Return True if the scheduled time has arrived and hasn't fired today yet."""
+        if self._schedule_time is None:
+            return False
+        now = datetime.now()
+        today = now.date()
+        if self._last_scheduled_date == today:
+            return False
+        if now.time() >= self._schedule_time:
+            self._last_scheduled_date = today
+            return True
+        return False
+
     async def _run_loop(self) -> None:
         """Run the command, then re-run on inotify events and/or a refresh timer.
 
@@ -234,14 +262,19 @@ class CommandPane(Widget):
         self._log.info("pane starting  cmd=%.80s", self.pane_cfg.command or "(none)")
         try:
             await self._run_once()
-            has_refresh = self.pane_cfg.refresh > 0
-            has_watch   = bool(self.pane_cfg.watch)
-            if not has_refresh and not has_watch:
+            has_refresh  = self.pane_cfg.refresh > 0
+            has_watch    = bool(self.pane_cfg.watch)
+            has_schedule = self._schedule_time is not None
+            if not has_refresh and not has_watch and not has_schedule:
                 return  # run-once mode
 
             trigger = asyncio.Event()
             if has_watch:
                 self._start_inotify_watcher(trigger)
+
+            # When schedule is the only wake-up mechanism, use a 30s poll so
+            # we catch the target minute within ~30 seconds.
+            _SCHEDULE_POLL = 30
 
             while True:
                 if has_refresh and has_watch:
@@ -252,10 +285,16 @@ class CommandPane(Widget):
                     trigger.clear()
                 elif has_refresh:
                     await asyncio.sleep(self.pane_cfg.refresh)
-                else:  # watch only
+                elif has_watch:
                     await trigger.wait()
                     trigger.clear()
-                await self._run_once()
+                else:  # schedule only — poll every 30s
+                    await asyncio.sleep(_SCHEDULE_POLL)
+
+                if self._schedule_due():
+                    await self._run_once()
+                elif not has_schedule:
+                    await self._run_once()
         except Exception:
             self._log.exception("unhandled error in _run_loop")
         finally:

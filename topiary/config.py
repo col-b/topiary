@@ -28,6 +28,7 @@ class PaneConfig:
     height: str = "1fr"      # used when pane is inside a column
     command: str | None = None
     refresh: int = 0         # 0 = no timer; >0 = re-run N seconds after last run completes
+    schedule: str | None = None  # "HH:MM" — re-run daily at that wall-clock time
     watch: list[str] = field(default_factory=list)  # paths to watch via inotify; re-run on any change
     min_width: int = 0       # collapse pane when terminal narrower than this
     cwd: str | None = None   # working directory for the command
