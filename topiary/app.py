@@ -91,7 +91,7 @@ class PerfOverlay(Static):
     def _refresh_stats(self) -> None:
         if not self.display:
             return
-        table = RichTable(title="Pane Perf (press d to close)", expand=True, show_lines=False)
+        table = RichTable(title="Pane Perf (press Ctrl+D or Esc to close)", expand=True, show_lines=False)
         table.add_column("Pane", style="cyan", max_width=16)
         table.add_column("Rndr/s", justify="right")
         table.add_column("Skip/s", justify="right")
@@ -128,7 +128,7 @@ class HelpOverlay(Static):
 
     DEFAULT_CSS = """
     HelpOverlay {
-        dock: top;
+        position: absolute;
         width: 70;
         height: auto;
         background: $surface;
@@ -162,8 +162,8 @@ class HelpOverlay(Static):
         help_text.append("  Enter       ", style="cyan")
         help_text.append("Enter passthrough mode (interact with pane)\n")
         help_text.append("  Escape      ", style="cyan")
-        help_text.append("Exit passthrough mode\n\n")
-        help_text.append("Press h to close", style="dim italic")
+        help_text.append("Close overlay / Exit passthrough mode\n\n")
+        help_text.append("Press h or Esc to close", style="dim italic")
         self.update(help_text)
         log.info("HelpOverlay mounted")
 
@@ -381,17 +381,58 @@ class TopiaryApp(App):
 
     def action_toggle_perf(self) -> None:
         """Toggle the performance overlay."""
-        overlay = self.query_one("#perf-overlay", PerfOverlay)
-        overlay.display = not overlay.display
-        if overlay.display:
-            overlay._refresh_stats()
+        perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
+        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        if perf_overlay.display:
+            perf_overlay.display = False
+            return
+        help_overlay.display = False
+        perf_overlay.display = True
+        perf_overlay._refresh_stats()
 
     def action_toggle_help(self) -> None:
         """Toggle the help overlay."""
         log.info("toggle_help action called")
-        overlay = self.query_one("#help-overlay", HelpOverlay)
-        overlay.display = not overlay.display
-        log.info("help overlay display=%s", overlay.display)
+        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
+        if help_overlay.display:
+            help_overlay.display = False
+        else:
+            perf_overlay.display = False
+            help_overlay.display = True
+            self.call_after_refresh(self._center_help_overlay)
+        log.info("help overlay display=%s", help_overlay.display)
+
+    def _has_open_overlay(self) -> bool:
+        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
+        return bool(help_overlay.display or perf_overlay.display)
+
+    def _center_help_overlay(self) -> None:
+        """Center the help overlay in the current terminal size."""
+        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        overlay_width = help_overlay.size.width or 70
+        overlay_height = help_overlay.size.height or 1
+        x = max(0, (self.size.width - overlay_width) // 2)
+        y = max(0, (self.size.height - overlay_height) // 2)
+        help_overlay.offset = (x, y)
+
+    def _close_overlays(self) -> bool:
+        """Close help/perf overlays if visible; returns True when any was closed."""
+        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
+        closed = False
+
+        if help_overlay.display:
+            help_overlay.display = False
+            closed = True
+        if perf_overlay.display:
+            perf_overlay.display = False
+            closed = True
+
+        if closed:
+            log.info("closed overlay(s) via escape")
+        return closed
 
     # -- Pane focus --------------------------------------------------------
 
@@ -472,6 +513,9 @@ class TopiaryApp(App):
             if self._focused_pane is not None:
                 self._focused_pane.remove_class("pane-active")
                 self._focused_pane.add_class("pane-focused")
+            self._close_overlays()
+        elif self._close_overlays():
+            return
         elif self._focused_pane is not None:
             self._set_focused_pane(None)
 
@@ -480,9 +524,9 @@ class TopiaryApp(App):
         if self._passthrough:
             # deactivate_pane exits passthrough; restart_pane forwards \x12 to PTY
             return action in ("deactivate_pane", "restart_pane")
-        # deactivate_pane requires a focused pane
+        # Escape should work with either focused pane or open overlays.
         if action == "deactivate_pane":
-            return self._focused_pane is not None
+            return self._focused_pane is not None or self._has_open_overlay()
         # restart_pane works both with and without focus (reload vs restart)
         return True
 
@@ -598,4 +642,6 @@ class TopiaryApp(App):
         for pane in self.query(".pane-collapsible"):
             min_w = getattr(pane, "_min_width", 0)
             pane.display = not (min_w and term_width < min_w)
-
+        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        if help_overlay.display:
+            self.call_after_refresh(self._center_help_overlay)
