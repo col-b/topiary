@@ -10,6 +10,7 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Static, TabbedContent, TabPane
 
@@ -128,14 +129,11 @@ class HelpOverlay(Static):
 
     DEFAULT_CSS = """
     HelpOverlay {
-        position: absolute;
         width: 70;
         height: auto;
         background: $surface;
         border: round $primary;
         padding: 1 3;
-        layer: overlay;
-        display: none;
     }
     """
 
@@ -166,6 +164,32 @@ class HelpOverlay(Static):
         help_text.append("Press h or Esc to close", style="dim italic")
         self.update(help_text)
         log.info("HelpOverlay mounted")
+
+
+class HelpScreen(ModalScreen[str | None]):
+    """Modal help screen centered over the dashboard."""
+
+    CSS = """
+    HelpScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+    """
+
+    BINDINGS = [
+        Binding("h", "close_help", show=False, priority=True),
+        Binding("escape", "close_help", show=False, priority=True),
+        Binding("ctrl+d", "open_perf", show=False, priority=True),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield HelpOverlay(id="help-overlay")
+
+    def action_close_help(self) -> None:
+        self.dismiss(None)
+
+    def action_open_perf(self) -> None:
+        self.dismiss("toggle_perf")
 
 
 
@@ -241,7 +265,6 @@ class TopiaryApp(App):
 
     def compose(self) -> ComposeResult:
         yield PerfOverlay(id="perf-overlay")
-        yield HelpOverlay(id="help-overlay")
         for i, row_cfg in enumerate(self.config_data.rows):
             panes: list[Widget] = []
             for pane_cfg in row_cfg.panes:
@@ -381,51 +404,46 @@ class TopiaryApp(App):
 
     def action_toggle_perf(self) -> None:
         """Toggle the performance overlay."""
+        if isinstance(self.screen, HelpScreen):
+            self.pop_screen()
         perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
-        help_overlay = self.query_one("#help-overlay", HelpOverlay)
         if perf_overlay.display:
             perf_overlay.display = False
             return
-        help_overlay.display = False
         perf_overlay.display = True
         perf_overlay._refresh_stats()
 
     def action_toggle_help(self) -> None:
         """Toggle the help overlay."""
         log.info("toggle_help action called")
-        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        if isinstance(self.screen, HelpScreen):
+            self.pop_screen()
+            log.info("help overlay display=False")
+            return
         perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
-        if help_overlay.display:
-            help_overlay.display = False
-        else:
-            perf_overlay.display = False
-            help_overlay.display = True
-            self.call_after_refresh(self._center_help_overlay)
-        log.info("help overlay display=%s", help_overlay.display)
+        perf_overlay.display = False
+        self.push_screen(HelpScreen(), self._on_help_screen_dismissed)
+        log.info("help overlay display=True")
+
+    def _on_help_screen_dismissed(self, result: str | None) -> None:
+        if result == "toggle_perf":
+            self.action_toggle_perf()
 
     def _has_open_overlay(self) -> bool:
-        help_overlay = self.query_one("#help-overlay", HelpOverlay)
+        if isinstance(self.screen, HelpScreen):
+            return True
         perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
-        return bool(help_overlay.display or perf_overlay.display)
-
-    def _center_help_overlay(self) -> None:
-        """Center the help overlay in the current terminal size."""
-        help_overlay = self.query_one("#help-overlay", HelpOverlay)
-        overlay_width = help_overlay.size.width or 70
-        overlay_height = help_overlay.size.height or 1
-        x = max(0, (self.size.width - overlay_width) // 2)
-        y = max(0, (self.size.height - overlay_height) // 2)
-        help_overlay.offset = (x, y)
+        return bool(perf_overlay.display)
 
     def _close_overlays(self) -> bool:
         """Close help/perf overlays if visible; returns True when any was closed."""
-        help_overlay = self.query_one("#help-overlay", HelpOverlay)
-        perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
         closed = False
 
-        if help_overlay.display:
-            help_overlay.display = False
+        if isinstance(self.screen, HelpScreen):
+            self.pop_screen()
             closed = True
+
+        perf_overlay = self.query_one("#perf-overlay", PerfOverlay)
         if perf_overlay.display:
             perf_overlay.display = False
             closed = True
@@ -642,6 +660,3 @@ class TopiaryApp(App):
         for pane in self.query(".pane-collapsible"):
             min_w = getattr(pane, "_min_width", 0)
             pane.display = not (min_w and term_width < min_w)
-        help_overlay = self.query_one("#help-overlay", HelpOverlay)
-        if help_overlay.display:
-            self.call_after_refresh(self._center_help_overlay)
