@@ -107,6 +107,7 @@ height = "1fr"
   seconds automatically.
 - `TERM=xterm-256color` is set in the PTY environment, so commands that check it behave correctly.
 - Panes with `min_width` set automatically hide when the terminal is too narrow.
+- For `scrollable = true` panes, set `autoscroll = true` to keep output pinned to the bottom.
 - **Auto-reload**: topiary watches the config file for changes. Save the file and the layout
   rebuilds live — no restart needed.
 

@@ -102,7 +102,10 @@ class CommandPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
-        self.set_interval(1 / self._refresh_rate_hz, self._maybe_refresh)
+        render_hz = self._refresh_rate_hz
+        if self.pane_cfg.interactive and self.pane_cfg.max_render_hz is None:
+            render_hz = max(render_hz, 30.0)
+        self.set_interval(1 / render_hz, self._maybe_refresh)
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
     def _set_border_title(self, hover: bool = False) -> None:
@@ -398,7 +401,15 @@ class CommandPane(Widget):
 
         # Per-pane render rate cap: if max_render_hz is set, skip renders that arrive
         # faster than that rate (dirty flag stays True so the next tick catches it).
+        # Interactive panes get a dynamic default cap:
+        # - active/passthrough pane -> up to 30 Hz (or global rate if higher)
+        # - inactive pane           -> global refresh_rate_hz
         max_hz = self.pane_cfg.max_render_hz
+        if max_hz is None and self.pane_cfg.interactive:
+            if self.has_class("pane-active"):
+                max_hz = max(30.0, self._refresh_rate_hz)
+            else:
+                max_hz = self._refresh_rate_hz
         if max_hz is not None and max_hz > 0:
             now = time.monotonic()
             if now - self._last_render_ts < 1.0 / max_hz:
@@ -420,7 +431,7 @@ class CommandPane(Widget):
                 scroller = self.query_one("#scroll", VerticalScroll)
                 at_bottom = scroller.is_vertical_scroll_end
                 output.update(rich_text)
-                if self.pane_cfg.follow and at_bottom:
+                if self.pane_cfg.autoscroll or (self.pane_cfg.follow and at_bottom):
                     scroller.scroll_end(animate=False)
             else:
                 output.update(rich_text)

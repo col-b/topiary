@@ -34,6 +34,7 @@ class PaneConfig:
     cwd: str | None = None   # working directory for the command
     scrollable: bool = False         # wrap output in a scrollable container
     follow: bool = False             # auto-scroll to bottom on new output (only if already at bottom)
+    autoscroll: bool = False         # always keep scrollable output pinned to bottom
     interactive: bool = False        # allow hover/focus/click-select and Tab cycling
     restart_on_resize: bool = False  # restart the command when the terminal is resized
     max_render_hz: float | None = None  # cap per-pane render rate (None = use global refresh_rate_hz)

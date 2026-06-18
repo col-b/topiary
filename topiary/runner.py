@@ -38,7 +38,7 @@ _NAMED = {
 }
 
 # Sentinel for a fully-default style (no color, no attributes)
-_DEFAULT_KEY = (None, None, False, False, False, False, False)
+_DEFAULT_KEY = (None, None, False, False, False, False, False, False)
 
 
 def _pyte_color(color: str | None, bold: bool = False) -> str | None:
@@ -62,26 +62,41 @@ def _char_key(char) -> tuple:
     else:
         fg = _pyte_color(char.fg, char.bold)
         bg = _pyte_color(char.bg)
-    return (fg, bg, char.bold, char.italics, char.underscore, char.blink, char.strikethrough)
+    return (fg, bg, char.bold, char.italics, char.underscore, char.blink, char.strikethrough, False)
+
+
+def _cursor_key(key: tuple) -> tuple:
+    """Return a style key that renders a visible cursor at this cell."""
+    fg, bg, bold, italics, underscore, blink, strike, reverse = key
+    if fg is None and bg is None:
+        fg, bg = "black", "white"
+    return (fg, bg, bold, italics, underscore, blink, strike, not reverse)
 
 
 def _key_to_style(key: tuple) -> Style | None:
     """Build a Rich Style from a key tuple; returns None for the default style."""
     if key == _DEFAULT_KEY:
         return None
-    fg, bg, bold, italics, underscore, blink, strike = key
+    fg, bg, bold, italics, underscore, blink, strike, reverse = key
     return Style(
         color=fg, bgcolor=bg,
         bold=bold, italic=italics,
-        underline=underscore, blink=blink, strike=strike,
+        underline=underscore, blink=blink, strike=strike, reverse=reverse,
     )
 
 
-def _render_row(line: dict, cols: int, default_key: tuple, style_cache: dict) -> Text:
+def _render_row(line: dict, cols: int, default_key: tuple, style_cache: dict, cursor_x: int | None = None) -> Text:
     """Render a single pyte screen row to a Rich Text (no trailing newline)."""
     row_text = Text(no_wrap=True, overflow="crop")
     if not line:
-        row_text.append(" " * cols)
+        if cursor_x is None or cursor_x < 0 or cursor_x >= cols:
+            row_text.append(" " * cols)
+        else:
+            if cursor_x:
+                row_text.append(" " * cursor_x)
+            row_text.append(" ", style=_key_to_style(_cursor_key(default_key)))
+            if cursor_x + 1 < cols:
+                row_text.append(" " * (cols - cursor_x - 1))
         return row_text
 
     written = sorted(line.items())
@@ -99,33 +114,43 @@ def _render_row(line: dict, cols: int, default_key: tuple, style_cache: dict) ->
         row_text.append("".join(run_chars), style=style)
         run_chars.clear()
 
-    for x, char in written:
-        if x > prev_x:
-            gap = x - prev_x
-            if run_key == default_key:
-                run_chars.append(" " * gap)
-            else:
-                _flush()
-                run_key = default_key
-                run_chars.append(" " * gap)
-        key = _char_key(char)
-        data = char.data or " "
+    def _append_chunk(key: tuple, text: str) -> None:
+        nonlocal run_key
+        if not text:
+            return
         if key == run_key:
-            run_chars.append(data)
+            run_chars.append(text)
         else:
             _flush()
             run_key = key
-            run_chars.append(data)
+            run_chars.append(text)
+
+    def _append_gap(gap_start: int, gap_len: int) -> None:
+        if gap_len <= 0:
+            return
+        if cursor_x is None or not (gap_start <= cursor_x < gap_start + gap_len):
+            _append_chunk(default_key, " " * gap_len)
+            return
+        before = cursor_x - gap_start
+        after = gap_len - before - 1
+        if before:
+            _append_chunk(default_key, " " * before)
+        _append_chunk(_cursor_key(default_key), " ")
+        if after:
+            _append_chunk(default_key, " " * after)
+
+    for x, char in written:
+        if x > prev_x:
+            _append_gap(prev_x, x - prev_x)
+        key = _char_key(char)
+        if cursor_x is not None and x == cursor_x:
+            key = _cursor_key(key)
+        data = char.data or " "
+        _append_chunk(key, data)
         prev_x = x + 1
 
     if prev_x < cols:
-        gap = cols - prev_x
-        if run_key == default_key:
-            run_chars.append(" " * gap)
-        else:
-            _flush()
-            run_key = default_key
-            run_chars.append(" " * gap)
+        _append_gap(prev_x, cols - prev_x)
 
     _flush()
     return row_text
@@ -145,6 +170,13 @@ def screen_to_rich(
     default_char = pyte.screens.Char(" ")
     default_key = _char_key(default_char)
     style_cache: dict[tuple, Style | None] = {}
+    cursor_visible = not getattr(screen.cursor, "hidden", False)
+    cursor_x = getattr(screen.cursor, "x", None) if cursor_visible else None
+    cursor_y = getattr(screen.cursor, "y", None) if cursor_visible else None
+    if cursor_x is not None and (cursor_x < 0 or cursor_x >= screen.columns):
+        cursor_x = None
+    if cursor_y is not None and (cursor_y < 0 or cursor_y >= screen.lines):
+        cursor_y = None
 
     last_content_row = screen.lines - 1
     if trim_trailing:
@@ -155,8 +187,12 @@ def screen_to_rich(
                 break
         else:
             last_content_row = 0
+    if cursor_y is not None:
+        last_content_row = max(last_content_row, cursor_y)
 
     # Ensure cache is right size
+    if cursor_y is not None:
+        line_cache = None
     if line_cache is not None:
         while len(line_cache) < screen.lines:
             line_cache.append(None)
@@ -171,11 +207,25 @@ def screen_to_rich(
                 # Reuse cached row
                 text.append_text(cached)
             else:
-                row_text = _render_row(screen.buffer[y], screen.columns, default_key, style_cache)
+                row_text = _render_row(
+                    screen.buffer[y],
+                    screen.columns,
+                    default_key,
+                    style_cache,
+                    cursor_x=cursor_x if y == cursor_y else None,
+                )
                 line_cache[y] = row_text
                 text.append_text(row_text)
         else:
-            text.append_text(_render_row(screen.buffer[y], screen.columns, default_key, style_cache))
+            text.append_text(
+                _render_row(
+                    screen.buffer[y],
+                    screen.columns,
+                    default_key,
+                    style_cache,
+                    cursor_x=cursor_x if y == cursor_y else None,
+                )
+            )
         text.append("\n")
 
     if line_cache is not None:
