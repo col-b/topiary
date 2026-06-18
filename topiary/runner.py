@@ -160,6 +160,7 @@ def screen_to_rich(
     screen: pyte.Screen,
     trim_trailing: bool = False,
     line_cache: list | None = None,
+    render_cursor: bool = False,
 ) -> Text:
     """Convert a pyte Screen buffer to a Rich Text object.
 
@@ -170,7 +171,7 @@ def screen_to_rich(
     default_char = pyte.screens.Char(" ")
     default_key = _char_key(default_char)
     style_cache: dict[tuple, Style | None] = {}
-    cursor_visible = not getattr(screen.cursor, "hidden", False)
+    cursor_visible = render_cursor and not getattr(screen.cursor, "hidden", False)
     cursor_x = getattr(screen.cursor, "x", None) if cursor_visible else None
     cursor_y = getattr(screen.cursor, "y", None) if cursor_visible else None
     if cursor_x is not None and (cursor_x < 0 or cursor_x >= screen.columns):
@@ -263,11 +264,12 @@ class TerminalRunner:
     def exit_code(self) -> int | None:
         return self._proc.returncode if self._proc else None
 
-    def render(self, trim_trailing: bool = False) -> Text:
+    def render(self, trim_trailing: bool = False, render_cursor: bool = False) -> Text:
         return screen_to_rich(
             self._screen,
             trim_trailing=trim_trailing,
             line_cache=None if trim_trailing else self._line_cache,
+            render_cursor=render_cursor,
         )
 
     # ------------------------------------------------------------------ #

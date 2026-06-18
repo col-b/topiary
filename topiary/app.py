@@ -502,31 +502,45 @@ class TopiaryApp(App):
         self._focused_pane.add_class("pane-active")
         # Title indicator on the target pane
         saved = target.border_title or ""
+        if saved.startswith("▶ "):
+            saved = saved[2:]
         target._passthrough_title_saved = saved
         if saved:
             target.border_title = f"▶ {saved}"
+        else:
+            target.border_title = "▶"
+
+    def _exit_passthrough(self, send_escape: bool = False) -> None:
+        """Leave passthrough mode and restore target pane title state."""
+        from .panes.command import CommandPane
+
+        t = self._passthrough_target
+        if t is not None and isinstance(t, CommandPane) and send_escape:
+            runner = t._runner
+            if runner is not None and runner._master_fd >= 0:
+                try:
+                    os.write(runner._master_fd, b"\x1b")
+                except OSError:
+                    pass
+
+        if self._passthrough:
+            log.debug("passthrough OFF  pane=%s", t.id if t else "none")
+
+        if t is not None:
+            saved = getattr(t, "_passthrough_title_saved", None)
+            if saved is not None:
+                t.border_title = saved
+                delattr(t, "_passthrough_title_saved")
+            elif t.border_title and t.border_title.startswith("▶ "):
+                t.border_title = t.border_title[2:]
+
+        self._passthrough = False
+        self._passthrough_target = None
 
     def action_deactivate_pane(self) -> None:
         """Escape → exit passthrough → focused; second Escape → unfocus."""
         if self._passthrough:
-            from .panes.command import CommandPane
-            # Signal the PTY process to clear any interactive selection state.
-            t = self._passthrough_target
-            if t is not None and isinstance(t, CommandPane):
-                runner = t._runner
-                if runner is not None and runner._master_fd >= 0:
-                    try:
-                        os.write(runner._master_fd, b"\x1b")
-                    except OSError:
-                        pass
-            self._passthrough = False
-            log.debug("passthrough OFF  pane=%s", t.id if t else "none")
-            # Restore title on the target pane
-            if t is not None:
-                saved = getattr(t, "_passthrough_title_saved", None)
-                if saved is not None:
-                    t.border_title = saved
-            self._passthrough_target = None
+            self._exit_passthrough(send_escape=True)
             # Back to focused (highlighted) state
             if self._focused_pane is not None:
                 self._focused_pane.remove_class("pane-active")
@@ -607,11 +621,11 @@ class TopiaryApp(App):
 
     def _set_focused_pane(self, widget: Widget | None) -> None:
         """Set visual focus highlight; clears passthrough as a side-effect."""
+        if self._passthrough:
+            self._exit_passthrough(send_escape=False)
         if self._focused_pane is not None:
             self._focused_pane.remove_class("pane-focused", "pane-active")
         self._focused_pane = widget
-        self._passthrough = False
-        self._passthrough_target = None
         if widget is not None:
             widget.add_class("pane-focused")
 

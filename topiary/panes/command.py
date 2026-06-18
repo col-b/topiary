@@ -194,7 +194,7 @@ class CommandPane(Widget):
         pass  # no longer used — kept so subclasses aren't broken
 
     def on_click(self, event: Click) -> None:
-        """Clicking the ⟳ triggers a refresh; other clicks cycle focus state."""
+        """Clicking the ⟳ triggers a refresh; other clicks toggle true focus."""
         if self.pane_cfg.refresh > 0 and event.y == 0 and event.x <= 3:
             event.stop()
             self.run_worker(self._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
@@ -205,14 +205,11 @@ class CommandPane(Widget):
             return
 
         event.stop()
-        # Cycle: unfocused → focused → selected → unfocused (+hover since mouse is still over)
         app = self.app
-        if self.has_class("pane-active"):
+        if app._focused_pane is self and not app._passthrough:
+            self.remove_class("pane-focused")
             app._set_focused_pane(None)
             self.add_class("pane-hover")
-        elif self.has_class("pane-focused"):
-            self.remove_class("pane-focused")
-            self.add_class("pane-active")
         else:
             app._set_focused_pane(self)
 
@@ -375,7 +372,10 @@ class CommandPane(Widget):
             finally:
                 if self._dirty:
                     try:
-                        text = runner.render(trim_trailing=self.pane_cfg.scrollable)
+                        text = runner.render(
+                            trim_trailing=self.pane_cfg.scrollable,
+                            render_cursor=self.pane_cfg.render_cursor,
+                        )
                         self.query_one("#output", Static).update(text)
                         self._dirty = False
                     except Exception:
@@ -420,7 +420,10 @@ class CommandPane(Widget):
         self._last_render_ts = time.monotonic()
         t0 = time.perf_counter()
         try:
-            rich_text = self._runner.render(trim_trailing=self.pane_cfg.scrollable)
+            rich_text = self._runner.render(
+                trim_trailing=self.pane_cfg.scrollable,
+                render_cursor=self.pane_cfg.render_cursor,
+            )
         except Exception:
             self._log.exception("error in render()")
             return

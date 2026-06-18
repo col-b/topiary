@@ -106,7 +106,7 @@ class TabsPane(Widget):
             self._set_border_title(hover=on_icon)
 
     def on_click(self, event: Click) -> None:
-        """Clicking ⟳ refreshes the active tab; other clicks cycle focus state."""
+        """Clicking ⟳ refreshes the active tab; other clicks toggle true focus."""
         if self.pane_cfg.refresh > 0 and event.y == 0 and event.x <= 3:
             event.stop()
             inner = self._get_active_inner_pane()
@@ -123,11 +123,9 @@ class TabsPane(Widget):
 
         event.stop()
         app = self.app
-        if self.has_class("pane-active"):
+        if app._focused_pane is self and not app._passthrough:
+            self.remove_class("pane-focused")
             app._set_focused_pane(None)
             self.add_class("pane-hover")
-        elif self.has_class("pane-focused"):
-            self.remove_class("pane-focused")
-            self.add_class("pane-active")
         else:
             app._set_focused_pane(self)
