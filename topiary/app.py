@@ -224,7 +224,7 @@ class TopiaryApp(App):
 
     BINDINGS = [
         Binding("h",         "toggle_help",      "Help",        priority=True),
-        Binding("ctrl+q",    "quit",             "Quit",        priority=True),
+        Binding("q",         "quit",             "Quit",        priority=True),
         Binding("ctrl+c",    "quit",             "Quit",        priority=True),
         Binding("ctrl+r",    "restart_pane",     "Restart pane", priority=True),
         Binding("ctrl+d",    "toggle_perf",      "Perf",        priority=True),
