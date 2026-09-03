@@ -65,9 +65,12 @@ class TabsPane(Widget):
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
 
+    def _has_refresh_icon(self) -> bool:
+        return self.pane_cfg.refresh > 0 or bool(self.pane_cfg.refresh_command)
+
     def _set_border_title(self, hover: bool = False) -> None:
         title = self.pane_cfg.title or self.pane_cfg.id
-        if self.pane_cfg.refresh > 0:
+        if self._has_refresh_icon():
             icon = "[bold yellow]⟳[/bold yellow]" if hover else "⟳"
             self.border_title = f"{icon} {title}"
         else:
@@ -97,7 +100,7 @@ class TabsPane(Widget):
             self._set_border_title(hover=False)
 
     def on_mouse_move(self, event: object) -> None:
-        if self.pane_cfg.refresh <= 0:
+        if not self._has_refresh_icon():
             return
         x, y = getattr(event, "x", -1), getattr(event, "y", -1)
         on_icon = y == 0 and x <= 3
@@ -107,11 +110,18 @@ class TabsPane(Widget):
 
     def on_click(self, event: Click) -> None:
         """Clicking ⟳ refreshes the active tab; other clicks toggle true focus."""
-        if self.pane_cfg.refresh > 0 and event.y == 0 and event.x <= 3:
+        if self._has_refresh_icon() and event.y == 0 and event.x <= 3:
             event.stop()
-            inner = self._get_active_inner_pane()
-            if inner is not None:
-                self.run_worker(inner._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
+            if self.pane_cfg.refresh_command:
+                import subprocess
+                subprocess.Popen(
+                    self.pane_cfg.refresh_command, shell=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                inner = self._get_active_inner_pane()
+                if inner is not None:
+                    self.run_worker(inner._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
             return
 
         # Tab label clicks should switch tabs, not cycle pane selection.

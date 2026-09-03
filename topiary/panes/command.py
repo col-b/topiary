@@ -108,18 +108,24 @@ class CommandPane(Widget):
         self.set_interval(1 / render_hz, self._maybe_refresh)
         self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
 
+    def _has_refresh_icon(self) -> bool:
+        """True if this pane shows the refresh icon (timer, schedule, or refresh_command)."""
+        return (self.pane_cfg.refresh > 0
+                or bool(self.pane_cfg.schedule)
+                or bool(self.pane_cfg.refresh_command))
+
     def _set_border_title(self, hover: bool = False) -> None:
         if not self._show_border:
             return
         title = self.pane_cfg.title or self.pane_cfg.id
-        if self.pane_cfg.refresh > 0 or self.pane_cfg.schedule:
+        if self._has_refresh_icon():
             icon = "[bold yellow]⟳[/bold yellow]" if hover else "⟳"
             self.border_title = f"{icon} {title}"
         else:
             self.border_title = title
 
     def on_mouse_move(self, event: object) -> None:
-        if self.pane_cfg.refresh <= 0 and not self.pane_cfg.schedule:
+        if not self._has_refresh_icon():
             return
         x, y = getattr(event, "x", -1), getattr(event, "y", -1)
         on_icon = y == 0 and x <= 3
@@ -142,6 +148,19 @@ class CommandPane(Widget):
         if self._runner is not None:
             self._runner.kill_sync()
             self._runner = None
+
+    def _fire_refresh_command(self) -> None:
+        """Run refresh_command as a fire-and-forget subprocess."""
+        import subprocess
+        cmd = self.pane_cfg.refresh_command
+        self._log.info("firing refresh_command: %s", cmd)
+        try:
+            subprocess.Popen(
+                cmd, shell=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except OSError as e:
+            self._log.error("refresh_command failed: %s", e)
 
     async def restart(self) -> None:
         """Kill the running process and restart the run loop from scratch."""
@@ -195,9 +214,12 @@ class CommandPane(Widget):
 
     def on_click(self, event: Click) -> None:
         """Clicking the ⟳ triggers a refresh; other clicks toggle true focus."""
-        if self.pane_cfg.refresh > 0 and event.y == 0 and event.x <= 3:
+        if self._has_refresh_icon() and event.y == 0 and event.x <= 3:
             event.stop()
-            self.run_worker(self._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
+            if self.pane_cfg.refresh_command:
+                self._fire_refresh_command()
+            else:
+                self.run_worker(self._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
             return
 
         # Only cycle focus for interactive panes.

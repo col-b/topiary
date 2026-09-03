@@ -37,10 +37,11 @@ height = "9"
 height = "1fr"
 
   [[rows.panes]]
-  id    = "dev"
-  type  = "tabs"
-  title = "Dev"
-  width = "1fr"
+  id              = "dev"
+  type            = "tabs"
+  title           = "Dev"
+  width           = "1fr"
+  refresh_command = "gh_poller --refresh"
 
     [[rows.panes.tabs]]
     title      = "Git"
