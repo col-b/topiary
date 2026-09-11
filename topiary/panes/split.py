@@ -29,12 +29,14 @@ class SplitPane(Widget):
         *,
         direction: Literal["column", "row"] = "column",
         refresh_rate_hz: float = 20.0,
+        start_immediately: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
         self._direction = direction
         self._refresh_rate_hz = refresh_rate_hz
+        self._active = start_immediately
 
     def on_mount(self) -> None:
         self.styles.layout = "vertical" if self._direction == "column" else "horizontal"
@@ -47,7 +49,12 @@ class SplitPane(Widget):
         for i, sub_cfg in enumerate(self.pane_cfg.panes):
             if not sub_cfg.id:
                 sub_cfg.id = f"{self.pane_cfg.id or 'split'}--sub{i}"
-            pane = make_pane(sub_cfg, self._refresh_rate_hz, id_prefix=sub_cfg.id)
+            pane = make_pane(
+                sub_cfg,
+                self._refresh_rate_hz,
+                id_prefix=sub_cfg.id,
+                start_immediately=self._active,
+            )
             if self._direction == "column":
                 pane.styles.height = sub_cfg.height
                 pane.styles.width = "1fr"
@@ -55,3 +62,21 @@ class SplitPane(Widget):
                 pane.styles.width = sub_cfg.width
                 pane.styles.height = "1fr"
             yield pane
+
+    def activate(self) -> None:
+        if self._active:
+            return
+        self._active = True
+        for pane in self.children:
+            activate = getattr(pane, "activate", None)
+            if activate is not None:
+                activate()
+
+    def deactivate(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        for pane in self.children:
+            deactivate = getattr(pane, "deactivate", None)
+            if deactivate is not None:
+                deactivate()

@@ -56,12 +56,17 @@ class CommandPane(Widget):
         *,
         show_border: bool = True,
         refresh_rate_hz: float = 20.0,
+        start_immediately: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
         self._show_border = show_border
         self._refresh_rate_hz = max(1.0, refresh_rate_hz)
+        # False for tabs that aren't the initially-selected one -- TabsPane
+        # starts/stops these explicitly via activate()/deactivate() so only
+        # the visible tab's process is ever running.
+        self._active: bool = start_immediately
         self._runner: TerminalRunner | None = None
         self._dirty: bool = False
         self._run_lock = asyncio.Lock()
@@ -106,7 +111,32 @@ class CommandPane(Widget):
         if self.pane_cfg.interactive and self.pane_cfg.max_render_hz is None:
             render_hz = max(render_hz, 30.0)
         self.set_interval(1 / render_hz, self._maybe_refresh)
-        self.run_worker(self._run_loop(), exclusive=True, name=f"cmd-{self.pane_cfg.id}")
+        if self._active:
+            self.run_worker(self._run_loop, exclusive=True, name=f"cmd-{self.pane_cfg.id}")
+
+    def activate(self) -> None:
+        """Start (or resume) this pane's command. Called by TabsPane when its
+        tab becomes the selected one -- runs immediately rather than waiting
+        for whatever refresh/watch interval the pane is configured with."""
+        if self._active:
+            return
+        self._active = True
+        self.run_worker(self._run_loop, exclusive=True, name=f"cmd-{self.pane_cfg.id}")
+
+    def deactivate(self) -> None:
+        """Stop this pane's command. Called by TabsPane when its tab is no
+        longer selected, so background tabs don't burn CPU running commands
+        nobody is looking at."""
+        if not self._active:
+            return
+        self._active = False
+        if self._runner is not None:
+            self._runner.kill_sync()
+            self._runner = None
+        worker_name = f"cmd-{self.pane_cfg.id}"
+        for worker in self.workers:
+            if worker.name == worker_name and not worker.is_finished:
+                worker.cancel()
 
     def _has_refresh_icon(self) -> bool:
         """True if this pane shows the refresh icon (timer, schedule, or refresh_command)."""
@@ -206,7 +236,7 @@ class CommandPane(Widget):
         output_widget.update("")
         
         # Start fresh worker
-        self.run_worker(self._run_loop(), exclusive=True, name=worker_name)
+        self.run_worker(self._run_loop, exclusive=True, name=worker_name)
         self._log.info("restart worker launched")
 
     def on_button_pressed(self, event: object) -> None:

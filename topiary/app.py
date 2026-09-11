@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 from pathlib import Path
 
 from rich.table import Table as RichTable
@@ -258,6 +259,38 @@ class TopiaryApp(App):
         log.info("app mounted  panes=%d  refresh_rate=%.1fhz  title=%r",
                  pane_count, self.config_data.refresh_rate_hz, self.config_data.title)
         self.run_worker(self._watch_config(), exclusive=True, name="config-watcher")
+        self._install_fatal_signal_handlers()
+
+    def _install_fatal_signal_handlers(self) -> None:
+        """Catch SIGTERM/SIGHUP so we can kill every pane's child process before
+        exiting.  Without this, killing topiary (or closing the terminal window
+        that hosts it, which typically sends SIGHUP) skips CommandPane.on_unmount()
+        entirely -- each pane's command was spawned with start_new_session=True so
+        it doesn't get killed automatically either, leaving it orphaned with a
+        dead pty. Orphaned watch-mode commands can then busy-loop forever on their
+        now-permanently-"readable" stdin. (SIGKILL can't be caught -- nothing here
+        can help against that -- but SIGTERM/SIGHUP cover normal kills and window closes.)
+        """
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            try:
+                loop.add_signal_handler(sig, self._handle_fatal_signal, sig)
+            except (NotImplementedError, RuntimeError):
+                pass  # platform doesn't support add_signal_handler for this signal
+
+    def _handle_fatal_signal(self, sig: int) -> None:
+        log.warning("received signal %d -- killing all pane processes before exit", sig)
+        self._kill_all_panes()
+        self.exit()
+
+    def _kill_all_panes(self) -> None:
+        """Synchronously kill every CommandPane's child process, regardless of
+        which tab/pane is active. Safe to call from a signal handler."""
+        from .panes.command import CommandPane
+        for pane in self.query(CommandPane):
+            if pane._runner is not None:
+                pane._runner.kill_sync()
+
 
     # ------------------------------------------------------------------ #
     # Composition                                                          #

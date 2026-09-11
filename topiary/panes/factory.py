@@ -15,6 +15,7 @@ def make_pane(
     *,
     show_border: bool = True,
     id_prefix: str = "",
+    start_immediately: bool = True,
 ) -> "Widget":  # type: ignore[name-defined]  # noqa: F821
     from textual.widget import Widget  # noqa: F401
 
@@ -27,17 +28,35 @@ def make_pane(
 
     match cfg.type:
         case "system":
-            return SystemPane(cfg, id=widget_id)
+            return SystemPane(cfg, id=widget_id, start_immediately=start_immediately)
         case "tabs":
-            return TabsPane(cfg, refresh_rate_hz=refresh_rate_hz, id=widget_id)
+            return TabsPane(
+                cfg,
+                refresh_rate_hz=refresh_rate_hz,
+                id=widget_id,
+                start_immediately=start_immediately,
+            )
         case "column":
-            return SplitPane(cfg, direction="column", refresh_rate_hz=refresh_rate_hz, id=widget_id)
+            return SplitPane(
+                cfg,
+                direction="column",
+                refresh_rate_hz=refresh_rate_hz,
+                id=widget_id,
+                start_immediately=start_immediately,
+            )
         case "row":
-            return SplitPane(cfg, direction="row", refresh_rate_hz=refresh_rate_hz, id=widget_id)
+            return SplitPane(
+                cfg,
+                direction="row",
+                refresh_rate_hz=refresh_rate_hz,
+                id=widget_id,
+                start_immediately=start_immediately,
+            )
         case _:  # "command" and anything else
             return CommandPane(
                 cfg,
                 show_border=show_border,
                 refresh_rate_hz=refresh_rate_hz,
                 id=widget_id,
+                start_immediately=start_immediately,
             )

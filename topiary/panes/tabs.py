@@ -36,11 +36,20 @@ class TabsPane(Widget):
     }
     """
 
-    def __init__(self, pane_cfg: PaneConfig, *, refresh_rate_hz: float = 20.0, **kwargs) -> None:
+    def __init__(
+        self,
+        pane_cfg: PaneConfig,
+        *,
+        refresh_rate_hz: float = 20.0,
+        start_immediately: bool = True,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
         self._refresh_rate_hz = refresh_rate_hz
+        self._active = start_immediately
         self._hover_refresh: bool = False
+        self._active_tab_id: str | None = None  # tracks which tab's command is running
 
     def compose(self) -> ComposeResult:
         with TabbedContent():
@@ -56,6 +65,12 @@ class TabsPane(Widget):
                         self._refresh_rate_hz,
                         show_border=False,
                         id_prefix=f"inner-{tab_cfg.id}",  # avoid duplicate ID with TabPane
+                        # Every tab is mounted up front by TabbedContent regardless of
+                        # visibility, so never auto-start here -- only the selected tab
+                        # should have its command running. on_mount() below starts
+                        # whichever tab is initially active; on_tabbed_content_tab_activated
+                        # takes over from there as the user switches tabs.
+                        start_immediately=False,
                     )
 
     def on_mount(self) -> None:
@@ -64,6 +79,10 @@ class TabsPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
+        tc = self.query_one(TabbedContent)
+        if self._active and tc.active:
+            self._activate_tab(tc.active)
+            self._active_tab_id = tc.active
 
     def _has_refresh_icon(self) -> bool:
         return self.pane_cfg.refresh > 0 or bool(self.pane_cfg.refresh_command)
@@ -76,18 +95,70 @@ class TabsPane(Widget):
         else:
             self.border_title = title
 
+    def _get_inner_pane(self, tab_id: str):
+        """Return the inner pane for a given tab id, or None."""
+        try:
+            return self.query_one(f"#inner-{tab_id}")
+        except Exception:
+            return None
+
     def _get_active_inner_pane(self):
         """Return the active tab's inner CommandPane, or None."""
         from .command import CommandPane
-        try:
-            tc = self.query_one(TabbedContent)
-            active_id = tc.active
-            if not active_id:
-                return None
-            inner = self.query_one(f"#inner-{active_id}")
-            return inner if isinstance(inner, CommandPane) else None
-        except Exception:
+
+        tc = self.query_one(TabbedContent)
+        active_id = tc.active
+        if not active_id:
             return None
+        inner = self._get_inner_pane(active_id)
+        return inner if isinstance(inner, CommandPane) else None
+
+    def _activate_tab(self, tab_id: str) -> None:
+        inner = self._get_inner_pane(tab_id)
+        if inner is not None:
+            activate = getattr(inner, "activate", None)
+            if activate is not None:
+                activate()
+
+    def _deactivate_tab(self, tab_id: str) -> None:
+        inner = self._get_inner_pane(tab_id)
+        if inner is not None:
+            deactivate = getattr(inner, "deactivate", None)
+            if deactivate is not None:
+                deactivate()
+
+    def activate(self) -> None:
+        if self._active:
+            return
+        self._active = True
+        tc = self.query_one(TabbedContent)
+        if tc.active:
+            self._activate_tab(tc.active)
+            self._active_tab_id = tc.active
+
+    def deactivate(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        if self._active_tab_id:
+            self._deactivate_tab(self._active_tab_id)
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Run only the selected tab's command; stop the one we're leaving.
+
+        Fires on both click and keyboard-driven tab switches, and once more
+        on initial mount for the default tab (harmless -- activate()/
+        deactivate() are no-ops when already in the requested state).
+        """
+        new_id = event.pane.id
+        old_id = self._active_tab_id
+        if new_id == old_id:
+            return
+        if old_id:
+            self._deactivate_tab(old_id)
+        if self._active and new_id:
+            self._activate_tab(new_id)
+        self._active_tab_id = new_id
 
     def on_enter(self, event: object) -> None:
         if self.pane_cfg.is_interactive:

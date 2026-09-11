@@ -57,9 +57,17 @@ class SystemPane(Widget):
     }
     """
 
-    def __init__(self, pane_cfg: PaneConfig, **kwargs) -> None:
+    def __init__(
+        self,
+        pane_cfg: PaneConfig,
+        *,
+        start_immediately: bool = True,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self.pane_cfg = pane_cfg
+        self._active = start_immediately
+        self._refresh_timer = None
         self._cpu_hist: deque[float] = deque(maxlen=_HISTORY_LEN)
         self._prev_net: psutil._common.snetio | None = None
         self._prev_net_time: float = 0.0
@@ -75,8 +83,24 @@ class SystemPane(Widget):
         if self.pane_cfg.min_width:
             self.add_class("pane-collapsible")
             self._min_width = self.pane_cfg.min_width
-        self._do_refresh()
-        self.set_interval(2, self._do_refresh)
+        if self._active:
+            self._do_refresh()
+        self._refresh_timer = self.set_interval(2, self._do_refresh, pause=not self._active)
+
+    def activate(self) -> None:
+        if self._active:
+            return
+        self._active = True
+        if self._refresh_timer is not None:
+            self._refresh_timer.resume()
+            self._do_refresh()
+
+    def deactivate(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        if self._refresh_timer is not None:
+            self._refresh_timer.pause()
 
     # ------------------------------------------------------------------ #
     # Refresh                                                              #
