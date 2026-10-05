@@ -99,6 +99,8 @@ height = "1fr"
 
 ### Tips
 
+Clicking a pane's refresh icon shows an italic `(refreshing...)` in its title until the refresh finishes. Repeated clicks while busy are ignored; a failed refresh command produces an error notification. Set `refresh_command` to run a separate shell command on click; Topiary waits for that command to exit. Commands that signal a daemon should wait for acknowledgment themselves if the indicator should cover the daemon's work, not just signal delivery.
+
 - Use **watch-mode** commands (e.g. `ticker -w AUR`, `git_branch_tree -w`) when the command
   supports it — topiary runs them in a real PTY so cursor-movement and color output works.
 - Use **one-shot** commands with `refresh = N` to re-run them every N seconds after they exit

@@ -8,9 +8,10 @@ from textual.widgets import Tab, TabbedContent, TabPane
 
 from ..config import PaneConfig
 from .factory import make_pane
+from .refresh import RefreshFeedback
 
 
-class TabsPane(Widget):
+class TabsPane(RefreshFeedback, Widget):
     """A pane containing named tabs; each tab can be any pane type, including tabs."""
 
     DEFAULT_CSS = """
@@ -88,7 +89,7 @@ class TabsPane(Widget):
         return self.pane_cfg.refresh > 0 or bool(self.pane_cfg.refresh_command)
 
     def _set_border_title(self, hover: bool = False) -> None:
-        title = self.pane_cfg.title or self.pane_cfg.id
+        title = self._refresh_title(self.pane_cfg.title or self.pane_cfg.id)
         if self._has_refresh_icon():
             icon = "[bold yellow]⟳[/bold yellow]" if hover else "⟳"
             self.border_title = f"{icon} {title}"
@@ -183,16 +184,8 @@ class TabsPane(Widget):
         """Clicking ⟳ refreshes the active tab; other clicks toggle true focus."""
         if self._has_refresh_icon() and event.y == 0 and event.x <= 3:
             event.stop()
-            if self.pane_cfg.refresh_command:
-                import subprocess
-                subprocess.Popen(
-                    self.pane_cfg.refresh_command, shell=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-            else:
-                inner = self._get_active_inner_pane()
-                if inner is not None:
-                    self.run_worker(inner._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
+            inner = self._get_active_inner_pane()
+            self._request_refresh(inner._run_once if inner is not None else None)
             return
 
         # Tab label clicks should switch tabs, not cycle pane selection.

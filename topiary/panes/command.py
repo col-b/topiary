@@ -18,6 +18,7 @@ from textual.widgets import Static
 from ..config import PaneConfig
 from ..log import log
 from ..runner import TerminalRunner
+from .refresh import RefreshFeedback
 
 _SCROLLABLE_ROWS = 200  # virtual PTY height for scrollable panes
 
@@ -26,7 +27,7 @@ _SCROLLABLE_ROWS = 200  # virtual PTY height for scrollable panes
 PANE_PERF: dict[str, dict[str, Any]] = {}
 
 
-class CommandPane(Widget):
+class CommandPane(RefreshFeedback, Widget):
     """Runs a shell command in a PTY; restarts after exit per `refresh` setting."""
 
     DEFAULT_CSS = """
@@ -147,7 +148,7 @@ class CommandPane(Widget):
     def _set_border_title(self, hover: bool = False) -> None:
         if not self._show_border:
             return
-        title = self.pane_cfg.title or self.pane_cfg.id
+        title = self._refresh_title(self.pane_cfg.title or self.pane_cfg.id)
         if self._has_refresh_icon():
             icon = "[bold yellow]⟳[/bold yellow]" if hover else "⟳"
             self.border_title = f"{icon} {title}"
@@ -178,19 +179,6 @@ class CommandPane(Widget):
         if self._runner is not None:
             self._runner.kill_sync()
             self._runner = None
-
-    def _fire_refresh_command(self) -> None:
-        """Run refresh_command as a fire-and-forget subprocess."""
-        import subprocess
-        cmd = self.pane_cfg.refresh_command
-        self._log.info("firing refresh_command: %s", cmd)
-        try:
-            subprocess.Popen(
-                cmd, shell=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-        except OSError as e:
-            self._log.error("refresh_command failed: %s", e)
 
     async def restart(self) -> None:
         """Kill the running process and restart the run loop from scratch."""
@@ -246,10 +234,7 @@ class CommandPane(Widget):
         """Clicking the ⟳ triggers a refresh; other clicks toggle true focus."""
         if self._has_refresh_icon() and event.y == 0 and event.x <= 3:
             event.stop()
-            if self.pane_cfg.refresh_command:
-                self._fire_refresh_command()
-            else:
-                self.run_worker(self._run_once(), name=f"force-refresh-{self.pane_cfg.id}")
+            self._request_refresh(self._run_once)
             return
 
         # Only cycle focus for interactive panes.
